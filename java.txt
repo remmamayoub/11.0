@@ -885,8 +885,8 @@ function getPackDetails(codePack) {
   const lieuEntreprise = Array.from(lieux).join('; ');
   // Fallback when stored totals are missing
   if (!totalRevenuePack) totalRevenuePack = totalPrix;
-  const costBase = totalCostPack || 0;
-  if (!totalNetPack) totalNetPack = totalRevenuePack - costBase;
+  if (!totalCostPack) totalCostPack = totalParamPack || totalPrix;
+  totalNetPack = totalRevenuePack - totalCostPack;
   
   Logger.log(`getPackDetails for code ${codePack}: found ${acts.length} acts`);
   return {codePack, packName, entreprise, totalEmployes, totalPrix, totalRevenuePack, totalCostPack, totalNetPack, lieuEntreprise, acts, calculeJourMedecin, nbrJourMedecin, calculeJourInfirmier, nbrJourInfirmier, calculeJourTechRadio, nbrJourTechRadio, nbrMed, nbrInf, nbrTech, totalParamPack, totalYalidinePack, totalRemunPack, totalTransportPack};
@@ -1289,7 +1289,7 @@ function saveCalculToDataCalculeSimple(
   medTaux, infTaux, techTaux,
   hebergement, dureeMed, dureeInf, dureeTech,
   frais, chargeSupp, nbrJours, dateFin,
-  totalRevenue, totalCost, totalNet, statut
+  totalRevenue, totalCost, totalNet, statut, detailsJson
 ) {
   try {
     Logger.log('saveCalculToDataCalculeSimple called');
@@ -1390,6 +1390,7 @@ function saveCalculToDataCalculeSimple(
     const validationFinance = totalRevenue > 0 && ((totalNet / totalRevenue) * 100) >= 70 ? 'Oui' : 'En attente';
     const dateValidation = validationFinance === 'Oui' ? Utilities.formatDate(today, Session.getScriptTimeZone(), 'yyyy-MM-dd') : '';
     const commentaires = validationFinance === 'Oui' ? `Auto-validé (marge ${margePct})` : `En attente validation Finance (marge ${margePct})`;
+    const finalCommentaires = (commentaires || '') + (detailsJson ? ` | Détails: ${detailsJson}` : '');
     
     const dataRow = [
       codeOpe,                           // Code Operation
@@ -1440,7 +1441,7 @@ function saveCalculToDataCalculeSimple(
       utilisateur,                       // Utilisateur
       validationFinance,                 // Validation Finance
       dateValidation,                    // Date Validation
-      commentaires,                      // Commentaires
+      finalCommentaires,                 // Commentaires
       margePct                           // Marge %
     ];
     
