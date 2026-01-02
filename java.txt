@@ -1,0 +1,3399 @@
+// Code.gs - Code complet du serveur Google Apps Script
+
+function doGet() {
+  return HtmlService.createHtmlOutputFromFile('index')
+    .setTitle('Gestion des Offres')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+// === INITIALISATION DE LA BASE DE DONNÉES ===
+/**
+ * Vérifie si une feuille a des en-têtes valides
+ * @param {Sheet} sheet - La feuille à vérifier
+ * @param {Array} expectedHeaders - Les en-têtes attendus
+ * @return {boolean} - True si les en-têtes sont valides
+ */
+function hasValidHeaders(sheet, expectedHeaders) {
+  if (sheet.getLastRow() === 0) return false;
+  
+  try {
+    const firstRowValues = sheet.getRange(1, 1, 1, Math.min(expectedHeaders.length, sheet.getLastColumn())).getValues()[0];
+    
+    // Vérifier si au moins les 2 premières colonnes correspondent
+    if (firstRowValues.length < 2) return false;
+    
+    const header1Matches = firstRowValues[0] && firstRowValues[0].toString().toLowerCase().includes(expectedHeaders[0].toLowerCase().substring(0, 4));
+    const header2Matches = firstRowValues[1] && firstRowValues[1].toString().toLowerCase().includes(expectedHeaders[1].toLowerCase().substring(0, 3));
+    
+    return header1Matches || header2Matches;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * Initialise toutes les feuilles nécessaires avec leurs colonnes
+ * Cette fonction crée automatiquement toutes les feuilles de la base de données
+ * si elles n'existent pas déjà, avec les en-têtes de colonnes appropriés
+ */
+function initializeDatabase() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheets = [];
+  
+  // Feuille "Offre" - Pour stocker les offres créées dans l'onglet Offre
+  const offreHeaders = [
+    'Code Offre', 'Nom Pack', 'Commercial', 'Entreprise', 'Nbr Employés Total',
+    'Site', 'Paramètres', 'Nbr Employés Site', 'Prix Total', 'Lieu',
+    'Calcule Jour Médecin', 'Nbr Jour Médecin', 'Calcule Jour Infirmier', 'Nbr Jour Infirmier',
+    'Calcule Jour Tech Radio', 'Nbr Jour Tech Radio', 'Nbr Médecin', 'Nbr Infirmier', 'Nbr Tech Radio',
+    'Date Enregistrement', 'Statut', 'Total Revenue', 'Total Coût Paramètre'
+  ];
+  sheets.push({ name: 'Offre', headers: offreHeaders });
+  
+  // Feuille "Data Calcule" - Pour stocker les calculs de l'onglet R-H (nouvelle version)
+  const dataCalculeHeaders = [
+    'Code Operation', 'Coordination', 'Date Operation', 'Entreprise', 'Nom Pack',
+    'Nbr Employés', 'Lieu', 'Site', 'Deplacement',
+    'Wilaya Depart Médecin', 'Wilaya Depart Infirmier', 'Wilaya Depart Tech Radio',
+    'Distance Médecin', 'Distance Infirmier', 'Distance Tech Radio',
+    'Matériels', 'Distance Matériel',
+    'Nbr Infirmier', 'Infirmiers (Noms)', 'Nbr Médecin', 'Médecins (Noms)',
+    'Nbr Tech Radio', 'Tech Radio (Noms)',
+    'Hébergement', 'Durée (med|inf|tech|log)',
+    'Taux Médecin', 'Taux Infirmier', 'Taux Tech Radio', 'Taux Logistique',
+    'Distance Total', 'Tarif Km', 'Déplacement Total',
+    'Durée Total', 'Frais Nuit', 'Hébergement Total',
+    'Charge Supplémentaire', 'Prix Visite Lieux', 'Total Charge Logistique',
+    'Total Param', 'Total Yalidine', 'Total Remuneration', 'Total Transport',
+    'Total Revenue', 'Total Cost', 'Total Net', 'Marge %',
+    'Observation', 'Date Enregistrement', 'Statut Calcul',
+    'Personnel Granulaire (JSON)', 'Remise'
+  ];
+  sheets.push({ name: 'Data Calcule', headers: dataCalculeHeaders });
+  
+  // Feuille "R-H" - Maintenue pour compatibilité (anciens calculs R-H)
+  const rhHeaders = [
+    'Code Operation', 'Coordination', 'Date Operation', 'Entreprise', 'Nom Pack',
+    'Nbr Employés', 'Lieu', 'Site', 'Deplacement',
+    'Wilaya Depart Médecin', 'Wilaya Depart Infirmier', 'Wilaya Depart Tech Radio',
+    'Distance Médecin', 'Distance Infirmier', 'Distance Tech Radio',
+    'Matériels', 'Distance Matériel',
+    'Nbr Infirmier', 'Infirmiers (Noms)', 'Nbr Médecin', 'Médecins (Noms)',
+    'Nbr Tech Radio', 'Tech Radio (Noms)',
+    'Hébergement', 'Durée (med|inf|tech|log)',
+    'Taux Médecin', 'Taux Infirmier', 'Taux Tech Radio', 'Taux Logistique',
+    'Distance Total', 'Tarif Km', 'Déplacement Total',
+    'Durée Total', 'Frais Nuit', 'Hébergement Total',
+    'Charge Supplémentaire', 'Prix Visite Lieux', 'Total Charge Logistique',
+    'Total Param', 'Total Yalidine', 'Total Remuneration', 'Total Transport',
+    'Total Revenue', 'Total Cost', 'Total Net', 'Marge %',
+    'Observation', 'Date Enregistrement', 'Statut Calcul',
+    'Personnel Granulaire (JSON)', 'Remise'
+  ];
+  sheets.push({ name: 'R-H', headers: rhHeaders });
+  
+  // Feuille "Data Programmation" - Pour stocker les opérations programmées
+  const progHeaders = [
+    'Code Operation', 'Coordination', 'Date Operation', 'Date Enregistrement',
+    'Entreprise', 'Nbr Employés', 'Lieu', 'Deplacement',
+    'Wilaya Depart Médecin', 'Wilaya Depart Infirmier', 'Wilaya Depart Tech Radio',
+    'Distance Médecin', 'Distance Infirmier', 'Distance Tech Radio',
+    'Matériels', 'Distance Matériel',
+    'Nbr Infirmier', 'Infirmiers (Noms)', 'Médecins (Noms)', 'Nbr Médecin',
+    'Tech Radio (Noms)', 'Nbr Tech Radio',
+    'Hébergement', 'Durée Mission', 'Barème', 'Charge Supplémentaire',
+    'Total Charge', 'Validation', 'Observation', 'Frais', 'Total', 'Statut',
+    'Pack Name', 'Nbr Jours', 'Statut Mission', 'Date Fin', 'Remise',
+    'Calcule Jour Médecin', 'Nbr Jour Médecin',
+    'Calcule Jour Infirmier', 'Nbr Jour Infirmier',
+    'Calcule Jour Tech Radio', 'Nbr Jour Tech Radio',
+    'Personnel Granulaire (JSON)'
+  ];
+  sheets.push({ name: 'Data Programmation', headers: progHeaders });
+  
+  // Feuille "Renouvellement" - Pour stocker les offres renouvelées
+  const renouvHeaders = [
+    'Code Renouvellement', 'Code Pack Original', 'Nom Pack', 'Entreprise',
+    'Date Création Original', 'Date Renouvellement', 'Nouvelle Date Début', 'Nouvelle Date Fin',
+    'Modification Effectuée', 'Commentaire', 'Statut', 'Date Enregistrement'
+  ];
+  sheets.push({ name: 'Renouvellement', headers: renouvHeaders });
+  
+  // Feuille "Pack" - Maintenue pour compatibilité (offres avec détails sites)
+  const packHeaders = [
+    'Code Pack', 'Nom Pack', 'Entreprise', 'Site', 'Paramètres', 'Nbr Employés Site',
+    'Col6', 'Prix Site', 'Nbr Employés Total', 'Lieu', 'Statut', 'Remise',
+    'Calcule Jour Médecin', 'Nbr Jour Médecin',
+    'Calcule Jour Infirmier', 'Nbr Jour Infirmier',
+    'Calcule Jour Tech Radio', 'Nbr Jour Tech Radio',
+    'Nbr Médecin Global', 'Nbr Infirmier Global', 'Nbr Tech Radio Global',
+    'Nbr Médecin Site', 'Nbr Infirmier Site', 'Nbr Tech Radio Site',
+    'Taux Médecin Est', 'Taux Infirmier Est', 'Taux Tech Radio Est', 'Taux Logistique Est',
+    'Distance Est', 'Durée Est', 'Frais Nuit Est', 'Charge Suppl Est', 'Total Charge Est Panel',
+    'Total Revenue', 'Total Cost', 'Total Net', 'Date Enregistrement',
+    'Total Param Pack', 'Total Yalidine Pack', 'Total Remun Pack', 'Total Transport Pack',
+    'Col42', 'Col43', 'Col44', 'Col45', 'Commercial'
+  ];
+  sheets.push({ name: 'Pack', headers: packHeaders });
+  
+  // Feuille "Data" - Maintenue pour compatibilité (anciennes données)
+  const dataHeaders = [
+    'Code Operation', 'Coordination', 'Date Operation', 'Date Enregistrement',
+    'Entreprise', 'Nbr Employés', 'Lieu', 'Deplacement',
+    'Wilaya Depart Médecin', 'Wilaya Depart Infirmier', 'Wilaya Depart Tech Radio',
+    'Distance Médecin', 'Distance Infirmier', 'Distance Tech Radio',
+    'Matériels', 'Distance Matériel',
+    'Nbr Infirmier', 'Infirmiers', 'Médecins', 'Nbr Médecin', 'Tech Radio', 'Nbr Tech Radio',
+    'Hébergement', 'Durée', 'Barème', 'Charge Supplémentaire', 'Total Charge',
+    'Validation', 'Observation', 'Frais', 'Total', 'Statut', 'Pack Name',
+    'Nbr Jours', 'Statut Mission', 'Date Fin', 'Remise',
+    'Calcule Jour Médecin', 'Nbr Jour Médecin',
+    'Calcule Jour Infirmier', 'Nbr Jour Infirmier',
+    'Calcule Jour Tech Radio', 'Nbr Jour Tech Radio',
+    'Personnel Granulaire'
+  ];
+  sheets.push({ name: 'Data', headers: dataHeaders });
+  
+  // Feuille "Rémunération"
+  const remunHeaders = [
+    'Type', 'Nom Complet', 'Code Operation', 'Date Operation',
+    'Nbr Jours', 'Taux Par Jour', 'Total Operation', 'Mois', 'Année',
+    'Payé', 'Date Paiement', 'Distance', 'Déplacement', 'Hébergement'
+  ];
+  sheets.push({ name: 'Rémunération', headers: remunHeaders });
+  
+  // Feuille "Paiements"
+  const paiementsHeaders = [
+    'Personnel', 'Mois', 'Année', 'Total Payé', 'Date Paiement'
+  ];
+  sheets.push({ name: 'Paiements', headers: paiementsHeaders });
+  
+  // Feuille "Médecin"
+  const medecinHeaders = [
+    'Code', 'Nom', 'Prénom', 'Téléphone', 'Wilaya'
+  ];
+  sheets.push({ name: 'Médecin', headers: medecinHeaders });
+  
+  // Feuille "Infirmier"
+  const infirmierHeaders = [
+    'Code', 'Nom', 'Prénom', 'Téléphone', 'Wilaya'
+  ];
+  sheets.push({ name: 'Infirmier', headers: infirmierHeaders });
+  
+  // Feuille "Tech Radio"
+  const techHeaders = [
+    'Code', 'Nom', 'Prénom', 'Téléphone', 'Wilaya'
+  ];
+  sheets.push({ name: 'Tech Radio', headers: techHeaders });
+  
+  // Feuille "Coordination"
+  const coordHeaders = [
+    'Code', 'Nom'
+  ];
+  sheets.push({ name: 'Coordination', headers: coordHeaders });
+  
+  // Feuille "Materiel"
+  const materielHeaders = [
+    'Code', 'Nom'
+  ];
+  sheets.push({ name: 'Materiel', headers: materielHeaders });
+  
+  // Feuille "Entreprise"
+  const entrepriseHeaders = [
+    'Code', 'Nom'
+  ];
+  sheets.push({ name: 'Entreprise', headers: entrepriseHeaders });
+  
+  // Feuille "Commercial"
+  const commercialHeaders = [
+    'Code', 'Nom', 'Prénom', 'Email', 'Entreprises'
+  ];
+  sheets.push({ name: 'Commercial', headers: commercialHeaders });
+  
+  // Feuille "acte"
+  const acteHeaders = [
+    'Code', 'Paramètre', 'Coût Unitaire', 'Majoration', 'Prix Public', 'Sous-Traitance', 'Famille'
+  ];
+  sheets.push({ name: 'acte', headers: acteHeaders });
+  
+  // Feuille "Barème"
+  const baremeHeaders = [
+    'Barème', 'Distance Max', 'Rate'
+  ];
+  sheets.push({ name: 'Barème', headers: baremeHeaders });
+  
+  // Feuille "Wilaya"
+  const wilayaHeaders = [
+    'Code', 'Nom'
+  ];
+  sheets.push({ name: 'Wilaya', headers: wilayaHeaders });
+  
+  // Feuille "Déplacement"
+  const deplacementHeaders = [
+    'Type Déplacement'
+  ];
+  sheets.push({ name: 'Déplacement', headers: deplacementHeaders });
+  
+  // Feuille "users" - Pour la gestion des utilisateurs
+  const usersHeaders = [
+    'Code', 'Username', 'Password', 'Role', 'Tabs', 'Permissions', 'CreatedAt'
+  ];
+  sheets.push({ name: 'users', headers: usersHeaders });
+  
+  // Feuille "Audit" - Pour la journalisation
+  const auditHeaders = [
+    'Timestamp', 'User', 'Role', 'Action', 'Details'
+  ];
+  sheets.push({ name: 'Audit', headers: auditHeaders });
+  
+  // Créer toutes les feuilles avec leurs en-têtes
+  let createdCount = 0;
+  let existingCount = 0;
+  const results = [];
+  
+  sheets.forEach(sheetDef => {
+    let sheet = ss.getSheetByName(sheetDef.name);
+    if (!sheet) {
+      sheet = ss.insertSheet(sheetDef.name);
+      // Ajouter les en-têtes
+      sheet.getRange(1, 1, 1, sheetDef.headers.length).setValues([sheetDef.headers]);
+      // Formater les en-têtes
+      sheet.getRange(1, 1, 1, sheetDef.headers.length)
+        .setBackground('#1e3d7d')
+        .setFontColor('white')
+        .setFontWeight('bold')
+        .setHorizontalAlignment('center');
+      // Geler la ligne d'en-tête
+      sheet.setFrozenRows(1);
+      createdCount++;
+      results.push(`✓ Créé: ${sheetDef.name} (${sheetDef.headers.length} colonnes)`);
+    } else {
+      // Vérifier si la première ligne contient les bons en-têtes
+      const needsHeaders = sheet.getLastRow() === 0 || !hasValidHeaders(sheet, sheetDef.headers);
+      
+      if (needsHeaders) {
+        // S'il y a des données existantes, les décaler vers le bas
+        if (sheet.getLastRow() > 0) {
+          sheet.insertRowBefore(1);
+        }
+        // Ajouter les en-têtes à la première ligne
+        sheet.getRange(1, 1, 1, sheetDef.headers.length).setValues([sheetDef.headers]);
+        sheet.getRange(1, 1, 1, sheetDef.headers.length)
+          .setBackground('#1e3d7d')
+          .setFontColor('white')
+          .setFontWeight('bold')
+          .setHorizontalAlignment('center');
+        sheet.setFrozenRows(1);
+        results.push(`✓ En-têtes ajoutés: ${sheetDef.name}`);
+      } else {
+        existingCount++;
+        results.push(`- Existe déjà avec en-têtes: ${sheetDef.name}`);
+      }
+    }
+  });
+  
+  const summary = `
+=== INITIALISATION DE LA BASE DE DONNÉES ===
+${results.join('\n')}
+
+Résumé:
+- ${createdCount} feuille(s) créée(s)
+- ${existingCount} feuille(s) existante(s)
+- ${sheets.length} feuille(s) au total
+
+Base de données initialisée avec succès!
+  `.trim();
+  
+  Logger.log(summary);
+  return summary;
+}
+
+/**
+ * Fonction de diagnostic pour vérifier l'état de la feuille Offre
+ * Utile pour comprendre pourquoi les offres ne s'affichent pas dans R-H
+ */
+function diagnosticOffreSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let offreSheet = ss.getSheetByName('Offre');
+  
+  if (!offreSheet) {
+    return 'ERREUR: La feuille "Offre" n\'existe pas. Exécutez initializeDatabase() d\'abord.';
+  }
+  
+  const lastRow = offreSheet.getLastRow();
+  const lastCol = offreSheet.getLastColumn();
+  
+  if (lastRow === 0) {
+    return 'ERREUR: La feuille "Offre" est vide. Créez une offre dans l\'onglet Offre.';
+  }
+  
+  // Vérifier les en-têtes
+  const headers = offreSheet.getRange(1, 1, 1, Math.min(15, lastCol)).getValues()[0];
+  const hasHeaders = headers[0] && headers[0].toString().toLowerCase().includes('code');
+  
+  if (!hasHeaders) {
+    return 'ERREUR: La feuille "Offre" n\'a pas d\'en-têtes. Exécutez initializeDatabase().';
+  }
+  
+  // Lire toutes les données
+  const data = offreSheet.getDataRange().getValues();
+  const offers = [];
+  
+  for (let i = 1; i < data.length; i++) {
+    offers.push({
+      row: i + 1,
+      codeOffre: data[i][0],
+      nomPack: data[i][1],
+      commercial: data[i][2],
+      entreprise: data[i][3],
+      statut: data[i][20]
+    });
+  }
+  
+  // Compter par statut
+  const aCalculer = offers.filter(o => o.statut === 'à calculer').length;
+  const calculer = offers.filter(o => o.statut === 'calculer').length;
+  const autres = offers.filter(o => o.statut !== 'à calculer' && o.statut !== 'calculer').length;
+  
+  // Lister les entreprises avec offres à calculer
+  const entreprisesACalculer = [...new Set(
+    offers.filter(o => o.statut === 'à calculer').map(o => o.entreprise)
+  )];
+  
+  let report = `
+=== DIAGNOSTIC FEUILLE OFFRE ===
+
+📊 Statistiques:
+- Total lignes (avec en-têtes): ${lastRow}
+- Total offres: ${offers.length}
+- Offres "à calculer": ${aCalculer}
+- Offres "calculer": ${calculer}
+- Autres statuts: ${autres}
+
+🏢 Entreprises avec offres "à calculer":
+${entreprisesACalculer.length > 0 ? entreprisesACalculer.map(e => `  - ${e}`).join('\n') : '  (Aucune)'}
+
+📋 Détail des 5 premières offres:
+${offers.slice(0, 5).map(o => `  Ligne ${o.row}: [${o.codeOffre}] ${o.nomPack} - ${o.entreprise} - Statut: "${o.statut}"`).join('\n')}
+
+${aCalculer === 0 ? '\n⚠️ PROBLÈME: Aucune offre avec statut "à calculer" trouvée!\nVérifiez que le statut dans la colonne U (21) est exactement "à calculer" (sans espace supplémentaire).' : '\n✅ Des offres "à calculer" existent et devraient apparaître dans l\'onglet R-H.'}
+
+ℹ️ NOTE: La feuille "Offre" est maintenant la source unique de données pour toutes les offres.
+  `.trim();
+  
+  Logger.log(report);
+  return report;
+}
+
+// Garder l'ancienne fonction pour compatibilité mais rediriger vers la nouvelle
+function diagnosticPackSheet() {
+  return diagnosticOffreSheet() + '\n\n⚠️ NOTE: Utilisez maintenant diagnosticOffreSheet() à la place.';
+}
+
+function safeFormatDate(dateObj, timeZone, format) {
+  let d = dateObj;
+  if (typeof d === 'string') d = new Date(d);
+  if (d instanceof Date && !isNaN(d.getTime())) {
+    return Utilities.formatDate(d, timeZone, format);
+  }
+  return '';
+}
+
+function getActes() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let acteSheet = ss.getSheetByName('acte');
+  if (!acteSheet) {
+    acteSheet = ss.insertSheet('acte');
+  }
+  const data = acteSheet.getDataRange().getValues();
+  const actes = [];
+  for (let i = 1; i < data.length; i++) {
+    actes.push({
+      code: data[i][0],
+      parametre: data[i][1],
+      coutUnitaire: data[i][2],
+      majoration: data[i][3],
+      prixPublic: data[i][4],
+      sousTraitance: data[i][5],
+      famille: data[i][6] ? data[i][6].toString().trim() : ''
+    });
+  }
+  return actes;
+}
+
+function getOptions() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let coordinationSheet = ss.getSheetByName('Coordination');
+  if (!coordinationSheet) {
+    coordinationSheet = ss.insertSheet('Coordination');
+  }
+  const coordinations = coordinationSheet.getRange('B2:B').getValues().flat().filter(Boolean);
+  let materielSheet = ss.getSheetByName('Materiel');
+  if (!materielSheet) {
+    materielSheet = ss.insertSheet('Materiel');
+  }
+  const materiels = materielSheet.getRange('B2:B').getValues().flat().filter(Boolean);
+  let medSheet = ss.getSheetByName('Médecin');
+  if (!medSheet) {
+    medSheet = ss.insertSheet('Médecin');
+  }
+  const medData = medSheet.getRange('B2:E').getValues().filter(row => row[0]);
+  const medecins = medData.map(row => `${row[1]} ${row[0]}`.trim());
+  let infSheet = ss.getSheetByName('Infirmier');
+  if (!infSheet) {
+    infSheet = ss.insertSheet('Infirmier');
+  }
+  const infData = infSheet.getRange('B2:E').getValues().filter(row => row[0]);
+  const infirmiers = infData.map(row => `${row[1]} ${row[0]}`.trim());
+  let techSheet = ss.getSheetByName('Tech Radio');
+  if (!techSheet) {
+    techSheet = ss.insertSheet('Tech Radio');
+  }
+  const techData = techSheet.getRange('B2:E').getValues().filter(row => row[0]);
+  const techRadios = techData.map(row => `${row[1]} ${row[0]}`.trim());
+  let deplacementSheet = ss.getSheetByName('Déplacement');
+  if (!deplacementSheet) {
+    deplacementSheet = ss.insertSheet('Déplacement');
+  }
+  const deplacements = deplacementSheet.getRange('A1:A').getValues().flat().filter(Boolean);
+  let entrepriseSheet = ss.getSheetByName('Entreprise');
+  if (!entrepriseSheet) {
+    entrepriseSheet = ss.insertSheet('Entreprise');
+  }
+  const entreprises = entrepriseSheet.getRange('B2:B').getValues().flat().filter(Boolean);
+  let wilayaSheet = ss.getSheetByName('Wilaya');
+  if (!wilayaSheet) {
+    wilayaSheet = ss.insertSheet('Wilaya');
+  }
+  const wilayas = wilayaSheet.getRange('B2:B').getValues().flat().filter(Boolean);
+  return {coordinations, materiels, medecins, infirmiers, techRadios, deplacements, entreprises, wilayas};
+}
+
+function getMedecinsFull() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let medSheet = ss.getSheetByName('Médecin');
+  if (!medSheet) {
+    medSheet = ss.insertSheet('Médecin');
+  }
+  const data = medSheet.getDataRange().getValues();
+  const medecins = [];
+  for (let i = 1; i < data.length; i++) {
+    medecins.push({
+      code: data[i][0],
+      nom: data[i][1],
+      prenom: data[i][2],
+      tel: data[i][3],
+      wilaya: data[i][4]
+    });
+  }
+  return medecins;
+}
+
+function getInfirmiersFull() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let infSheet = ss.getSheetByName('Infirmier');
+  if (!infSheet) {
+    infSheet = ss.insertSheet('Infirmier');
+  }
+  const data = infSheet.getDataRange().getValues();
+  const infirmiers = [];
+  for (let i = 1; i < data.length; i++) {
+    infirmiers.push({
+      code: data[i][0],
+      nom: data[i][1],
+      prenom: data[i][2],
+      tel: data[i][3],
+      wilaya: data[i][4]
+    });
+  }
+  return infirmiers;
+}
+
+function getTechRadiosFull() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let techSheet = ss.getSheetByName('Tech Radio');
+  if (!techSheet) {
+    techSheet = ss.insertSheet('Tech Radio');
+  }
+  const data = techSheet.getDataRange().getValues();
+  const techRadios = [];
+  for (let i = 1; i < data.length; i++) {
+    techRadios.push({
+      code: data[i][0],
+      nom: data[i][1],
+      prenom: data[i][2],
+      tel: data[i][3],
+      wilaya: data[i][4]
+    });
+  }
+  return techRadios;
+}
+
+function getPacks() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let packSheet = ss.getSheetByName('Pack');
+  if (!packSheet) {
+    packSheet = ss.insertSheet('Pack');
+  }
+  const data = packSheet.getDataRange().getValues();
+  const packs = [];
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] && !packs.some(p => p.codePack === data[i][0])) {
+      packs.push({codePack: data[i][0], packName: data[i][1], entreprise: data[i][2]});
+    }
+  }
+  return packs;
+}
+
+function getPacksByStatus(status) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let packSheet = ss.getSheetByName('Pack');
+  if (!packSheet) {
+    packSheet = ss.insertSheet('Pack');
+  }
+  const data = packSheet.getDataRange().getValues();
+  const packs = [];
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] && data[i][10] === status && !packs.some(p => p.codePack === data[i][0])) {
+      packs.push({codePack: data[i][0], packName: data[i][1], entreprise: data[i][2]});
+    }
+  }
+  return packs;
+}
+
+function getEnterprisesByPackStatus(status) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // Lire depuis la feuille "Offre" (nouvelle logique)
+  let offreSheet = ss.getSheetByName('Offre');
+  if (!offreSheet) {
+    Logger.log('Offre sheet does not exist');
+    return [];
+  }
+  
+  // Vérifier si la feuille a des données
+  if (offreSheet.getLastRow() < 2) {
+    Logger.log('Offre sheet has no data rows');
+    return [];
+  }
+  
+  const data = offreSheet.getDataRange().getValues();
+  let enterprises = new Set();
+  
+  // Log pour debug
+  Logger.log(`Checking ${data.length - 1} rows in Offre sheet for status: ${status}`);
+  
+  for (let i = 1; i < data.length; i++) {
+    // Dans la feuille Offre: Colonne 3 (index 3) = Entreprise, Colonne 20 (index 20) = Statut
+    if (data[i][20] === status && data[i][3]) {
+      enterprises.add(data[i][3]);
+      Logger.log(`Found entreprise: ${data[i][3]} with status: ${data[i][20]}`);
+    }
+  }
+  
+  const result = Array.from(enterprises).filter(Boolean);
+  Logger.log(`Returning ${result.length} enterprises with status '${status}'`);
+  return result;
+}
+
+function getPacksByEnterpriseAndStatus(enterprise, status) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // Lire depuis la feuille "Offre" (nouvelle logique)
+  let offreSheet = ss.getSheetByName('Offre');
+  if (!offreSheet) {
+    Logger.log('Offre sheet does not exist');
+    return [];
+  }
+  
+  // Vérifier si la feuille a des données
+  if (offreSheet.getLastRow() < 2) {
+    Logger.log('Offre sheet has no data rows');
+    return [];
+  }
+  
+  const data = offreSheet.getDataRange().getValues();
+  let packs = [];
+  
+  Logger.log(`Looking for packs in Offre sheet: enterprise='${enterprise}', status='${status}'`);
+  
+  for (let i = 1; i < data.length; i++) {
+    // Dans la feuille Offre: Colonne 0 = Code Offre, Colonne 1 = Nom Pack, Colonne 3 = Entreprise, Colonne 20 = Statut
+    if (data[i][3] === enterprise && data[i][20] === status && data[i][0] && !packs.some(p => p.codePack === data[i][0])) {
+      packs.push({codePack: data[i][0], packName: data[i][1]});
+      Logger.log(`Found pack: ${data[i][0]} - ${data[i][1]}`);
+    }
+  }
+  
+  Logger.log(`Returning ${packs.length} packs for '${enterprise}' with status '${status}'`);
+  return packs;
+}
+
+function savePack(packName, entreprise, commercial, nbrEmployePack, acts, calculeJourMedecin, nbrJourMedecin, calculeJourInfirmier, nbrJourInfirmier, calculeJourTechRadio, nbrJourTechRadio, nbrMed, nbrInf, nbrTech, estimation, totalRevenuePack, totalCostPack, totalNetPack) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    
+    // Check if enterprise is already owned by another commercial
+    const existingCommercial = getCommercialForEntreprise(entreprise);
+    if (existingCommercial && existingCommercial.fullName !== commercial) {
+      return `Erreur: L'entreprise ${entreprise} est déjà créée par le commercial "${existingCommercial.fullName}". Vous ne pouvez pas créer une offre pour cette entreprise.`;
+    }
+    
+    let entrepriseSheet = ss.getSheetByName('Entreprise');
+    if (!entrepriseSheet) {
+      entrepriseSheet = ss.insertSheet('Entreprise');
+    }
+    const entrepriseData = entrepriseSheet.getDataRange().getValues();
+    let codeEntreprise = '';
+    for (let i = 1; i < entrepriseData.length; i++) {
+      if (entrepriseData[i][1] === entreprise) {
+        codeEntreprise = entrepriseData[i][0];
+        break;
+      }
+    }
+    if (!codeEntreprise) {
+      const lastRowEnt = entrepriseSheet.getLastRow();
+      codeEntreprise = lastRowEnt > 1 ? Number(entrepriseSheet.getRange(lastRowEnt, 1).getValue()) + 1 : 1;
+      entrepriseSheet.appendRow([codeEntreprise, entreprise]);
+    }
+    
+    // Find commercial code
+    let commercialSheet = ss.getSheetByName('Commercial');
+    let commercialCode = '';
+    if (commercialSheet) {
+      const commData = commercialSheet.getDataRange().getValues();
+      for (let i = 1; i < commData.length; i++) {
+        const fullName = `${commData[i][2]} ${commData[i][1]}`.trim();
+        if (fullName === commercial) {
+          commercialCode = commData[i][0];
+          break;
+        }
+      }
+    }
+    
+    // Associate enterprise with commercial
+    if (commercialCode && !existingCommercial) {
+      associateEntrepriseToCommercial(commercialCode, entreprise);
+    }
+    
+    // === NOUVELLE LOGIQUE: Enregistrer UNIQUEMENT dans la feuille "Offre" ===
+    let offreSheet = ss.getSheetByName('Offre');
+    if (!offreSheet) {
+      offreSheet = ss.insertSheet('Offre');
+      // Ajouter les en-têtes si la feuille vient d'être créée
+      const offreHeaders = [
+        'Code Offre', 'Nom Pack', 'Commercial', 'Entreprise', 'Nbr Employés Total',
+        'Site', 'Paramètres', 'Nbr Employés Site', 'Prix Total', 'Lieu',
+        'Calcule Jour Médecin', 'Nbr Jour Médecin', 'Calcule Jour Infirmier', 'Nbr Jour Infirmier',
+        'Calcule Jour Tech Radio', 'Nbr Jour Tech Radio', 'Nbr Médecin', 'Nbr Infirmier', 'Nbr Tech Radio',
+        'Date Enregistrement', 'Statut', 'Total Revenue', 'Total Coût Paramètre'
+      ];
+      offreSheet.getRange(1, 1, 1, offreHeaders.length).setValues([offreHeaders]);
+      offreSheet.getRange(1, 1, 1, offreHeaders.length)
+        .setBackground('#1e3d7d')
+        .setFontColor('white')
+        .setFontWeight('bold')
+        .setHorizontalAlignment('center');
+      offreSheet.setFrozenRows(1);
+    }
+    
+    // Générer le code offre
+    const lastRow = offreSheet.getLastRow();
+    const codeOffre = lastRow > 1 ? Number(offreSheet.getRange(lastRow, 1).getValue()) + 1 : 1;
+    const dateEnreg = new Date();
+    
+    const {
+      tauxMedEst = 0,
+      tauxInfEst = 0,
+      tauxTechEst = 0,
+      tauxLogEst = 0,
+      distanceEst = 0,
+      tarifKlmEst = 0,
+      dureeEst = 0,
+      fraisNuitEst = 0,
+      chargeSuppEst = 0,
+      totalChargeEstPanel = 0,
+      totalParamPack = 0,
+      totalYalidinePack = 0,
+      totalRemunPack = 0,
+      totalTransportPack = 0
+    } = estimation || {};
+    
+    const grouped = {};
+    acts.forEach(act => {
+      const siteKey = act.site || '';
+      if (!grouped[siteKey]) {
+        grouped[siteKey] = {
+          params: [],
+          totalPrix: 0,
+          totalEmployes: 0,
+          lieu: act.lieu || '',
+          nbrMed: act.nbrMed || 1,
+          nbrInf: act.nbrInf || 1,
+          nbrTech: act.nbrTech || 0,
+          totalCostSite: undefined,
+          totalNetSite: undefined,
+          totalRevenueSite: undefined,
+          totalParamSite: undefined,
+          totalYalidineSite: undefined
+        };
+      }
+      grouped[siteKey].params.push(act.acte);
+      grouped[siteKey].totalPrix += act.nbrEmploye * act.prixU;
+      grouped[siteKey].totalEmployes += act.nbrEmploye;
+      if (grouped[siteKey].totalCostSite === undefined && act.siteCost !== undefined) {
+        grouped[siteKey].totalCostSite = act.siteCost;
+      }
+      if (grouped[siteKey].totalNetSite === undefined && act.siteNet !== undefined) {
+        grouped[siteKey].totalNetSite = act.siteNet;
+      }
+      if (grouped[siteKey].totalRevenueSite === undefined && act.siteRevenue !== undefined) {
+        grouped[siteKey].totalRevenueSite = act.siteRevenue;
+      }
+      if (grouped[siteKey].totalParamSite === undefined && act.totalParamSite !== undefined) {
+        grouped[siteKey].totalParamSite = act.totalParamSite;
+      }
+      if (grouped[siteKey].totalYalidineSite === undefined && act.totalYalidineSite !== undefined) {
+        grouped[siteKey].totalYalidineSite = act.totalYalidineSite;
+      }
+    });
+    
+    // Enregistrer chaque site dans la feuille Offre UNIQUEMENT
+    Object.keys(grouped).forEach(siteKey => {
+      const g = grouped[siteKey];
+      offreSheet.appendRow([
+        codeOffre,                   // Code Offre
+        packName,                    // Nom Pack
+        commercial || '',            // Commercial
+        entreprise,                  // Entreprise
+        nbrEmployePack,              // Nbr Employés Total
+        siteKey,                     // Site
+        g.params.join(','),          // Paramètres
+        g.totalEmployes,             // Nbr Employés Site
+        g.totalPrix,                 // Prix Total
+        g.lieu,                      // Lieu
+        calculeJourMedecin,          // Calcule Jour Médecin
+        nbrJourMedecin,              // Nbr Jour Médecin
+        calculeJourInfirmier,        // Calcule Jour Infirmier
+        nbrJourInfirmier,            // Nbr Jour Infirmier
+        calculeJourTechRadio,        // Calcule Jour Tech Radio
+        nbrJourTechRadio,            // Nbr Jour Tech Radio
+        nbrMed,                      // Nbr Médecin
+        nbrInf,                      // Nbr Infirmier
+        nbrTech,                     // Nbr Tech Radio
+        dateEnreg,                   // Date Enregistrement
+        'à calculer',                // Statut
+        (g.totalRevenueSite !== undefined ? g.totalRevenueSite : totalRevenuePack) || 0,  // Total Revenue
+        (g.totalCostSite !== undefined ? g.totalCostSite : totalCostPack) || 0           // Total Coût Paramètre (anciennement Total Cost)
+      ]);
+    });
+    
+    Logger.log(`Offre enregistrée avec code ${codeOffre} dans la feuille Offre uniquement`);
+    return 'Offre enregistrée avec code ' + codeOffre + '.';
+  } catch (error) {
+    Logger.log('Erreur savePack: ' + error);
+    return 'Erreur serveur savePack: ' + (error && error.message ? error.message : error);
+  }
+}
+
+function getPackDetails(codePack) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const timeZone = ss.getSpreadsheetTimeZone();
+  
+  // Lire depuis la feuille "Offre" (nouvelle logique)
+  let offreSheet = ss.getSheetByName('Offre');
+  if (!offreSheet) {
+    Logger.log('Offre sheet does not exist');
+    return {codePack, packName: '', entreprise: '', totalEmployes: 0, totalPrix: 0, totalRevenuePack: 0, totalCostPack: 0, totalNetPack: 0, lieuEntreprise: '', acts: [], calculeJourMedecin: 0, nbrJourMedecin: 0, calculeJourInfirmier: 0, nbrJourInfirmier: 0, calculeJourTechRadio: 0, nbrJourTechRadio: 0, nbrMed: 1, nbrInf: 1, nbrTech: 1, totalParamPack: 0, totalYalidinePack: 0, totalRemunPack: 0, totalTransportPack: 0};
+  }
+  
+  const data = offreSheet.getDataRange().getValues();
+  let packName = '';
+  let entreprise = '';
+  let totalEmployes = 0;
+  let totalPrix = 0;
+  let totalRevenuePack = 0;
+  let totalCostPack = 0;
+  let totalNetPack = 0;
+  let lieux = new Set();
+  let calculeJourMedecin = 0;
+  let nbrJourMedecin = 0;
+  let calculeJourInfirmier = 0;
+  let nbrJourInfirmier = 0;
+  let calculeJourTechRadio = 0;
+  let nbrJourTechRadio = 0;
+  let nbrMed = 1;
+  let nbrInf = 1;
+  let nbrTech = 1;
+  let totalParamPack = 0;
+  let totalYalidinePack = 0;
+  let totalRemunPack = 0;
+  let totalTransportPack = 0;
+  let acts = [];
+  
+  // Structure de la feuille Offre:
+  // 0: Code Offre, 1: Nom Pack, 2: Commercial, 3: Entreprise, 4: Nbr Employés Total,
+  // 5: Site, 6: Paramètres, 7: Nbr Employés Site, 8: Prix Total, 9: Lieu,
+  // 10: Calcule Jour Médecin, 11: Nbr Jour Médecin, 12: Calcule Jour Infirmier, 13: Nbr Jour Infirmier,
+  // 14: Calcule Jour Tech Radio, 15: Nbr Jour Tech Radio, 16: Nbr Médecin, 17: Nbr Infirmier, 18: Nbr Tech Radio,
+  // 19: Date Enregistrement, 20: Statut, 21: Total Revenue, 22: Total Cost
+  
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] == codePack) {
+      if (!packName) packName = data[i][1];
+      if (!entreprise) entreprise = data[i][3]; // Colonne D (index 3)
+      totalEmployes = data[i][4] || 0; // Colonne E (index 4)
+      if (data[i][9]) lieux.add(data[i][9]); // Colonne J (index 9) - Lieu
+      totalPrix += Number(data[i][8]) || 0; // Colonne I (index 8) - Prix Total
+      if (!totalRevenuePack) totalRevenuePack = data[i][21] || 0; // Colonne V (index 21)
+      if (!totalCostPack) totalCostPack = data[i][22] || 0; // Colonne W (index 22)
+      // Calcul du Net à partir de Revenue - Cost
+      totalNetPack = (totalRevenuePack || 0) - (totalCostPack || 0);
+      
+      if (!calculeJourMedecin) calculeJourMedecin = data[i][10] || 0; // Colonne K
+      if (!nbrJourMedecin) nbrJourMedecin = data[i][11] || 0; // Colonne L
+      if (!calculeJourInfirmier) calculeJourInfirmier = data[i][12] || 0; // Colonne M
+      if (!nbrJourInfirmier) nbrJourInfirmier = data[i][13] || 0; // Colonne N
+      if (!calculeJourTechRadio) calculeJourTechRadio = data[i][14] || 0; // Colonne O
+      if (!nbrJourTechRadio) nbrJourTechRadio = data[i][15] || 0; // Colonne P
+      if (!nbrMed) nbrMed = data[i][16] || 1; // Colonne Q
+      if (!nbrInf) nbrInf = data[i][17] || 1; // Colonne R
+      if (!nbrTech) nbrTech = data[i][18] || 1; // Colonne S
+      
+      // Parser les paramètres (actes) depuis la colonne "Paramètres"
+      const params = (data[i][6] || '').toString().split(',').filter(p => p.trim());
+      const nbrEmployeSite = data[i][7] || 0;
+      const prixTotal = data[i][8] || 0;
+      const prixU = nbrEmployeSite > 0 ? prixTotal / nbrEmployeSite : 0;
+      
+      params.forEach(acte => {
+        acts.push({
+          acte: acte.trim(),
+          nbrEmploye: nbrEmployeSite,
+          prixU: prixU,
+          prix: prixTotal,
+          remise: 0,
+          site: data[i][5] || 'Site 1',
+          nbrMed: nbrMed,
+          nbrInf: nbrInf,
+          nbrTech: nbrTech
+        });
+      });
+    }
+  }
+  
+  const lieuEntreprise = Array.from(lieux).join('; ');
+  // Fallback when stored totals are missing
+  if (!totalRevenuePack) totalRevenuePack = totalPrix;
+  const costBase = totalCostPack || 0;
+  if (!totalNetPack) totalNetPack = totalRevenuePack - costBase;
+  
+  Logger.log(`getPackDetails for code ${codePack}: found ${acts.length} acts`);
+  return {codePack, packName, entreprise, totalEmployes, totalPrix, totalRevenuePack, totalCostPack, totalNetPack, lieuEntreprise, acts, calculeJourMedecin, nbrJourMedecin, calculeJourInfirmier, nbrJourInfirmier, calculeJourTechRadio, nbrJourTechRadio, nbrMed, nbrInf, nbrTech, totalParamPack, totalYalidinePack, totalRemunPack, totalTransportPack};
+}
+
+function getBaremeRate() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let baremeSheet = ss.getSheetByName('Barème');
+  if (!baremeSheet) {
+    baremeSheet = ss.insertSheet('Barème');
+    baremeSheet.getRange('A2').setValue(15); // Default rate
+  }
+  return baremeSheet.getRange('A2').getValue();
+}
+
+function updatePackStatus(codePack, newStatus) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // Mettre à jour dans la feuille Offre (nouvelle logique)
+  let offreSheet = ss.getSheetByName('Offre');
+  if (!offreSheet) {
+    Logger.log('Offre sheet does not exist');
+    return;
+  }
+  
+  const data = offreSheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    // Dans la feuille Offre: Colonne 0 = Code Offre, Colonne 20 = Statut
+    if (data[i][0] == codePack) {
+      offreSheet.getRange(i + 1, 21).setValue(newStatus); // Colonne 21 (U) = Statut
+      
+      // Si le statut devient "calculer", enregistrer dans la feuille R-H
+      if (newStatus === 'calculer') {
+        saveToRHSheet(data[i], codePack);
+      }
+    }
+  }
+  
+  Logger.log(`Status updated to '${newStatus}' for offre ${codePack} in Offre sheet`);
+}
+
+/**
+ * Enregistre les données calculées dans la feuille R-H
+ * @param {Array} packRow - Ligne de données du Pack
+ * @param {number} codePack - Code du pack
+ */
+function saveToRHSheet(packRow, codePack) {
+  try {
+    Logger.log('Saving to Data Calcule sheet');
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let rhSheet = ss.getSheetByName('Data Calcule');
+    
+    if (!rhSheet) {
+      rhSheet = ss.insertSheet('Data Calcule');
+      // Ajouter les en-têtes si la feuille vient d'être créée
+      const rhHeaders = [
+        'Code Operation', 'Coordination', 'Date Operation', 'Entreprise', 'Nom Pack',
+        'Nbr Employés', 'Lieu', 'Site', 'Deplacement',
+        'Wilaya Depart Médecin', 'Wilaya Depart Infirmier', 'Wilaya Depart Tech Radio',
+        'Distance Médecin', 'Distance Infirmier', 'Distance Tech Radio',
+        'Matériels', 'Distance Matériel',
+        'Nbr Infirmier', 'Infirmiers (Noms)', 'Nbr Médecin', 'Médecins (Noms)',
+        'Nbr Tech Radio', 'Tech Radio (Noms)',
+        'Hébergement', 'Durée (med|inf|tech|log)',
+        'Taux Médecin', 'Taux Infirmier', 'Taux Tech Radio', 'Taux Logistique',
+        'Distance Total', 'Tarif Km', 'Déplacement Total',
+        'Durée Total', 'Frais Nuit', 'Hébergement Total',
+        'Charge Supplémentaire', 'Prix Visite Lieux', 'Total Charge Logistique',
+        'Total Param', 'Total Yalidine', 'Total Remuneration', 'Total Transport',
+        'Total Revenue', 'Total Cost', 'Total Net', 'Marge %',
+        'Observation', 'Date Enregistrement', 'Statut Calcul',
+        'Personnel Granulaire (JSON)', 'Remise'
+      ];
+      rhSheet.getRange(1, 1, 1, rhHeaders.length).setValues([rhHeaders]);
+      rhSheet.getRange(1, 1, 1, rhHeaders.length)
+        .setBackground('#1e3d7d')
+        .setFontColor('white')
+        .setFontWeight('bold')
+        .setHorizontalAlignment('center');
+      rhSheet.setFrozenRows(1);
+    }
+    
+    // Obtenir le dernier code d'opération
+    const lastRow = rhSheet.getLastRow();
+    const codeOpe = lastRow > 1 ? Number(rhSheet.getRange(lastRow, 1).getValue()) + 1 : 1;
+    
+    // Extraire les données de l'offre (indices du tableau packRow correspondent aux colonnes Offre)
+    // Structure Offre: 0:Code, 1:Nom, 2:Commercial, 3:Entreprise, 4:NbrEmpTotal, 5:Site, 6:Params, 
+    // 7:NbrEmpSite, 8:PrixTotal, 9:Lieu, 10:CalcJourMed, 11:NbrJourMed, 12:CalcJourInf, 13:NbrJourInf,
+    // 14:CalcJourTech, 15:NbrJourTech, 16:NbrMed, 17:NbrInf, 18:NbrTech, 19:DateEnreg, 20:Statut, 
+    // 21:TotalRevenue, 22:TotalCoutParam
+    const packName = packRow[1] || '';
+    const commercial = packRow[2] || '';
+    const entreprise = packRow[3] || '';
+    const nbrEmployesTotal = packRow[4] || 0;
+    const site = packRow[5] || '';
+    const params = packRow[6] || '';
+    const nbrEmployesSite = packRow[7] || 0;
+    const prixSite = packRow[8] || 0;
+    const lieu = packRow[9] || '';
+    const calculeJourMed = packRow[10] || 0;
+    const nbrJourMed = packRow[11] || 0;
+    const calculeJourInf = packRow[12] || 0;
+    const nbrJourInf = packRow[13] || 0;
+    const calculeJourTech = packRow[14] || 0;
+    const nbrJourTech = packRow[15] || 0;
+    const nbrMedGlobal = packRow[16] || 1;
+    const nbrInfGlobal = packRow[17] || 1;
+    const nbrTechGlobal = packRow[18] || 0;
+    const dateEnreg = packRow[19] || new Date();
+    const statut = packRow[20] || '';
+    const totalRevenue = packRow[21] || 0;
+    const totalCoutParam = packRow[22] || 0;
+    
+    // Valeurs par défaut pour les champs non présents dans Offre
+    const remise = 0;
+    const tauxMed = 0;
+    const tauxInf = 0;
+    const tauxTech = 0;
+    const tauxLog = 0;
+    const distanceEst = 0;
+    const dureeEst = 0;
+    const fraisNuit = 0;
+    const chargeSupp = 0;
+    const totalChargePanel = 0;
+    const totalParam = totalCoutParam;
+    const totalYalidine = 0;
+    const totalRemun = 0;
+    const totalTransport = 0;
+    const totalCost = totalCoutParam;
+    const totalNet = totalRevenue - totalCost;
+    
+    // Calculer la marge %
+    const marge = totalRevenue > 0 ? ((totalNet / totalRevenue) * 100) : 0;
+    
+    // Enregistrer dans la feuille R-H
+    rhSheet.appendRow([
+      codeOpe,                     // Code Operation
+      '',                          // Coordination (à renseigner manuellement si nécessaire)
+      new Date(),                  // Date Operation (date actuelle par défaut)
+      entreprise,                  // Entreprise
+      packName,                    // Nom Pack
+      nbrEmployesTotal,            // Nbr Employés
+      lieu,                        // Lieu
+      site,                        // Site
+      '',                          // Deplacement
+      '',                          // Wilaya Depart Médecin
+      '',                          // Wilaya Depart Infirmier
+      '',                          // Wilaya Depart Tech Radio
+      0,                           // Distance Médecin
+      0,                           // Distance Infirmier
+      0,                           // Distance Tech Radio
+      '',                          // Matériels
+      0,                           // Distance Matériel
+      nbrInfGlobal,                // Nbr Infirmier
+      '',                          // Infirmiers (Noms)
+      nbrMedGlobal,                // Nbr Médecin
+      '',                          // Médecins (Noms)
+      nbrTechGlobal,               // Nbr Tech Radio
+      '',                          // Tech Radio (Noms)
+      '',                          // Hébergement
+      `med:${dureeEst}|inf:${dureeEst}|tech:${dureeEst}|log:${dureeEst}`, // Durée
+      tauxMed,                     // Taux Médecin
+      tauxInf,                     // Taux Infirmier
+      tauxTech,                    // Taux Tech Radio
+      tauxLog,                     // Taux Logistique
+      distanceEst,                 // Distance Total
+      15,                          // Tarif Km (valeur par défaut)
+      totalTransport,              // Déplacement Total
+      dureeEst,                    // Durée Total
+      fraisNuit,                   // Frais Nuit
+      fraisNuit * dureeEst,        // Hébergement Total
+      chargeSupp,                  // Charge Supplémentaire
+      30000,                       // Prix Visite Lieux (valeur par défaut)
+      totalChargePanel,            // Total Charge Logistique
+      totalParam,                  // Total Param
+      totalYalidine,               // Total Yalidine
+      totalRemun,                  // Total Remuneration
+      totalTransport,              // Total Transport
+      totalRevenue,                // Total Revenue
+      totalCost,                   // Total Cost
+      totalNet,                    // Total Net
+      marge,                       // Marge %
+      '',                          // Observation
+      dateEnreg,                   // Date Enregistrement
+      'calculer',                  // Statut Calcul
+      '',                          // Personnel Granulaire (JSON)
+      remise                       // Remise
+    ]);
+    
+    Logger.log(`Data saved to Data Calcule sheet successfully for pack ${codePack} with operation code ${codeOpe}`);
+  } catch (error) {
+    Logger.log('Erreur saveToRHSheet: ' + error);
+  }
+}
+
+/**
+ * Sauvegarde directe des calculs dans la feuille Data Calcule
+ * Cette fonction est appelée depuis le frontend pour sauvegarder les calculs R-H
+ * @param {Object} data - Objet contenant toutes les données de calcul
+ * @return {Object} - {success: boolean, message: string}
+ */
+function saveCalculToDataCalcule(data) {
+  try {
+    // Validate data parameter
+    if (!data) {
+      Logger.log('ERROR: data parameter is undefined or null');
+      return {success: false, message: 'Erreur: Aucune donnée reçue'};
+    }
+    
+    Logger.log('saveCalculToDataCalcule called');
+    Logger.log('data type: ' + typeof data);
+    Logger.log('data.packSelect: ' + data.packSelect);
+    
+    if (!data.packSelect) {
+      Logger.log('ERROR: data.packSelect is missing');
+      return {success: false, message: 'Erreur: Code offre manquant'};
+    }
+    
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    
+    // 1. Vérifier/Créer la feuille Data Calcule
+    Logger.log('Checking if Data Calcule sheet exists...');
+    let dataCalculeSheet = ss.getSheetByName('Data Calcule');
+    
+    if (!dataCalculeSheet) {
+      Logger.log('Data Calcule sheet not found, creating it...');
+      dataCalculeSheet = ss.insertSheet('Data Calcule');
+      
+      // Ajouter les en-têtes (50 colonnes)
+      const headers = [
+        'Code Operation', 'Coordination', 'Date Operation', 'Entreprise', 'Nom Pack',
+        'Nbr Employés', 'Lieu', 'Site', 'Deplacement', 'Paramètres', 'Prix Total',
+        'Médecin', 'Infirmier', 'Tech Radio', 'Matériel',
+        'Distance Médecin', 'Distance Infirmier', 'Distance Tech Radio', 'Distance Matériel',
+        'Taux Médecin', 'Taux Infirmier', 'Taux Tech Radio',
+        'Nbr Médecin', 'Nbr Infirmier', 'Nbr Tech Radio',
+        'Hébergement', 'Durée Médecin', 'Durée Infirmier', 'Durée Tech Radio', 'Durée Logistique',
+        'Frais', 'Charge Supplémentaire', 'Statut', 'Nbr Jours', 'Date Fin',
+        'Wilaya Départ Médecin', 'Wilaya Départ Infirmier', 'Wilaya Départ Tech Radio',
+        'Distance Total', 'Nbr Employés Total',
+        'Total Revenue', 'Total Cost', 'Total Net', 'Marge Net',
+        'Date Enregistrement', 'Utilisateur', 'Validation Finance', 'Date Validation', 'Commentaires', 'Marge %'
+      ];
+      
+      dataCalculeSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+      dataCalculeSheet.getRange(1, 1, 1, headers.length)
+        .setBackground('#4285f4')
+        .setFontColor('#ffffff')
+        .setFontWeight('bold');
+      dataCalculeSheet.setFrozenRows(1);
+      
+      Logger.log('Created Data Calcule sheet with ' + headers.length + ' headers');
+    } else {
+      Logger.log('Data Calcule sheet exists');
+    }
+    
+    // 2. Récupérer les données de l'offre depuis la feuille Offre
+    Logger.log('Getting pack details from Offre sheet...');
+    const offreSheet = ss.getSheetByName('Offre');
+    if (!offreSheet) {
+      throw new Error('Feuille Offre introuvable');
+    }
+    
+    const offreData = offreSheet.getDataRange().getValues();
+    let packRow = null;
+    for (let i = 1; i < offreData.length; i++) {
+      if (offreData[i][0] == data.packSelect) {
+        packRow = offreData[i];
+        break;
+      }
+    }
+    
+    if (!packRow) {
+      throw new Error('Offre ' + data.packSelect + ' introuvable dans la feuille Offre');
+    }
+    
+    Logger.log('Found pack in Offre sheet');
+    
+    // 3. Générer un code opération unique
+    const today = new Date();
+    const dateStr = Utilities.formatDate(today, Session.getScriptTimeZone(), 'yyyyMMdd');
+    const existingCodes = dataCalculeSheet.getRange(2, 1, Math.max(1, dataCalculeSheet.getLastRow() - 1), 1).getValues();
+    const todayOps = existingCodes.filter(row => row[0] && row[0].toString().includes(dateStr));
+    const opNumber = (todayOps.length + 1).toString().padStart(3, '0');
+    const codeOpe = `OPE-${data.packSelect}-${dateStr}-${opNumber}`;
+    
+    Logger.log('Generated operation code: ' + codeOpe);
+    
+    // 4. Calculer la marge
+    const margeNet = data.totalNet || 0;
+    const margePct = data.totalRevenue > 0 ? ((data.totalNet / data.totalRevenue) * 100).toFixed(2) + '%' : '0%';
+    
+    // 5. Préparer les données (50 colonnes)
+    Logger.log('Preparing data row with 50 columns...');
+    const distanceTotal = (data.distanceMedecin || 0) + (data.distanceInfirmier || 0) + (data.distanceTechRadio || 0) + (data.distanceMateriel || 0);
+    const nbrEmployesTotal = (data.nbrMedecin || 0) + (data.nbrInfirmier || 0) + (data.nbrTechRadio || 0);
+    
+    const utilisateur = Session.getActiveUser().getEmail();
+    const dateEnregistrement = Utilities.formatDate(today, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+    
+    // Déterminer validation finance
+    const validationFinance = data.totalRevenue > 0 && ((data.totalNet / data.totalRevenue) * 100) >= 70 ? 'Oui' : 'En attente';
+    const dateValidation = validationFinance === 'Oui' ? Utilities.formatDate(today, Session.getScriptTimeZone(), 'yyyy-MM-dd') : '';
+    const commentaires = validationFinance === 'Oui' ? `Auto-validé (marge ${margePct})` : `En attente validation Finance (marge ${margePct})`;
+    
+    const dataRow = [
+      codeOpe,                           // Code Operation
+      packRow[2] || '',                  // Coordination (Commercial)
+      Utilities.formatDate(today, Session.getScriptTimeZone(), 'dd/MM/yyyy'), // Date Operation
+      data.entreprise || packRow[3] || '', // Entreprise
+      packRow[1] || '',                  // Nom Pack
+      packRow[4] || 0,                   // Nbr Employés
+      packRow[9] || '',                  // Lieu
+      packRow[5] || '',                  // Site
+      '',                                // Deplacement
+      packRow[6] || '',                  // Paramètres
+      packRow[8] || 0,                   // Prix Total
+      data.medecins || '',               // Médecin (noms)
+      data.infirmiers || '',             // Infirmier (noms)
+      data.techRadio || '',              // Tech Radio (noms)
+      data.materiels || '',              // Matériel
+      data.distanceMedecin || 0,         // Distance Médecin
+      data.distanceInfirmier || 0,       // Distance Infirmier
+      data.distanceTechRadio || 0,       // Distance Tech Radio
+      data.distanceMateriel || 0,        // Distance Matériel
+      data.medTaux || 0,                 // Taux Médecin
+      data.infTaux || 0,                 // Taux Infirmier
+      data.techTaux || 0,                // Taux Tech Radio
+      data.nbrMedecin || 0,              // Nbr Médecin
+      data.nbrInfirmier || 0,            // Nbr Infirmier
+      data.nbrTechRadio || 0,            // Nbr Tech Radio
+      data.hebergement || 'non',         // Hébergement
+      data.dureeMed || 0,                // Durée Médecin
+      data.dureeInf || 0,                // Durée Infirmier
+      data.dureeTech || 0,               // Durée Tech Radio
+      data.dureeLog || 0,                // Durée Logistique
+      data.frais || 0,                   // Frais
+      data.chargeSupp || 0,              // Charge Supplémentaire
+      data.statut || 'calculer',         // Statut
+      data.nbrJours || 0,                // Nbr Jours
+      data.dateFin || '',                // Date Fin
+      data.wilayaDepartMedecin || '',    // Wilaya Départ Médecin
+      data.wilayaDepartInfirmier || '',  // Wilaya Départ Infirmier
+      data.wilayaDepartTechRadio || '',  // Wilaya Départ Tech Radio
+      distanceTotal,                     // Distance Total
+      nbrEmployesTotal,                  // Nbr Employés Total
+      data.totalRevenue || 0,            // Total Revenue
+      data.totalCost || 0,               // Total Cost
+      data.totalNet || 0,                // Total Net
+      margeNet,                          // Marge Net
+      dateEnregistrement,                // Date Enregistrement
+      utilisateur,                       // Utilisateur
+      validationFinance,                 // Validation Finance
+      dateValidation,                    // Date Validation
+      commentaires,                      // Commentaires
+      margePct                           // Marge %
+    ];
+    
+    Logger.log('Data row prepared successfully');
+    
+    // 6. Ajouter la ligne à la feuille
+    Logger.log('Appending data to Data Calcule sheet...');
+    dataCalculeSheet.appendRow(dataRow);
+    Logger.log('Data saved successfully to Data Calcule sheet');
+    
+    // 7. Mettre à jour le statut dans la feuille Offre
+    Logger.log('Updating status in Offre sheet to: ' + (data.statut || 'calculer'));
+    for (let i = 1; i < offreData.length; i++) {
+      if (offreData[i][0] == data.packSelect) {
+        offreSheet.getRange(i + 1, 21).setValue(data.statut || 'calculer'); // Colonne 21 = Statut
+        Logger.log('Status updated successfully');
+        break;
+      }
+    }
+    
+    Logger.log('saveCalculToDataCalcule completed successfully');
+    return {
+      success: true,
+      message: `Calcul sauvegardé avec succès dans Data Calcule (Code: ${codeOpe})`
+    };
+    
+  } catch (error) {
+    Logger.log('Erreur saveCalculToDataCalcule: ' + error.toString());
+    return {
+      success: false,
+      message: 'Erreur lors de la sauvegarde: ' + error.toString()
+    };
+  }
+}
+
+/**
+ * SIMPLIFIED VERSION: Accepts individual parameters instead of complex object
+ * This avoids potential serialization issues with Google Apps Script
+ */
+function saveCalculToDataCalculeSimple(
+  packSelect, entreprise, distanceMedecin, distanceInfirmier, distanceTechRadio,
+  nbrMedecin, nbrInfirmier, nbrTechRadio,
+  medecins, infirmiers, techRadio,
+  medTaux, infTaux, techTaux,
+  hebergement, dureeMed, dureeInf, dureeTech,
+  frais, chargeSupp, nbrJours, dateFin,
+  totalRevenue, totalCost, totalNet, statut
+) {
+  try {
+    Logger.log('saveCalculToDataCalculeSimple called');
+    Logger.log('packSelect: ' + packSelect);
+    Logger.log('entreprise: ' + entreprise);
+    Logger.log('totalRevenue: ' + totalRevenue + ', totalCost: ' + totalCost + ', totalNet: ' + totalNet);
+    
+    // Validate required parameters
+    if (!packSelect) {
+      Logger.log('ERROR: packSelect is missing');
+      return {success: false, message: 'Erreur: Code offre manquant'};
+    }
+    
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    
+    // 1. Vérifier/Créer la feuille Data Calcule
+    Logger.log('Checking if Data Calcule sheet exists...');
+    let dataCalculeSheet = ss.getSheetByName('Data Calcule');
+    
+    if (!dataCalculeSheet) {
+      Logger.log('Data Calcule sheet not found, creating it...');
+      dataCalculeSheet = ss.insertSheet('Data Calcule');
+      
+      // Ajouter les en-têtes (50 colonnes)
+      const headers = [
+        'Code Operation', 'Coordination', 'Date Operation', 'Entreprise', 'Nom Pack',
+        'Nbr Employés', 'Lieu', 'Site', 'Deplacement', 'Paramètres', 'Prix Total',
+        'Médecin', 'Infirmier', 'Tech Radio', 'Matériel',
+        'Distance Médecin', 'Distance Infirmier', 'Distance Tech Radio', 'Distance Matériel',
+        'Taux Médecin', 'Taux Infirmier', 'Taux Tech Radio',
+        'Nbr Médecin', 'Nbr Infirmier', 'Nbr Tech Radio',
+        'Hébergement', 'Durée Médecin', 'Durée Infirmier', 'Durée Tech Radio', 'Durée Logistique',
+        'Frais', 'Charge Supplémentaire', 'Statut', 'Nbr Jours', 'Date Fin',
+        'Wilaya Départ Médecin', 'Wilaya Départ Infirmier', 'Wilaya Départ Tech Radio',
+        'Distance Total', 'Nbr Employés Total',
+        'Total Revenue', 'Total Cost', 'Total Net', 'Marge Net',
+        'Date Enregistrement', 'Utilisateur', 'Validation Finance', 'Date Validation', 'Commentaires', 'Marge %'
+      ];
+      
+      dataCalculeSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+      dataCalculeSheet.getRange(1, 1, 1, headers.length)
+        .setBackground('#4285f4')
+        .setFontColor('#ffffff')
+        .setFontWeight('bold');
+      dataCalculeSheet.setFrozenRows(1);
+      
+      Logger.log('Created Data Calcule sheet with ' + headers.length + ' headers');
+    } else {
+      Logger.log('Data Calcule sheet exists');
+    }
+    
+    // 2. Récupérer les données de l'offre depuis la feuille Offre
+    Logger.log('Getting pack details from Offre sheet...');
+    const offreSheet = ss.getSheetByName('Offre');
+    if (!offreSheet) {
+      throw new Error('Feuille Offre introuvable');
+    }
+    
+    const offreData = offreSheet.getDataRange().getValues();
+    let packRow = null;
+    for (let i = 1; i < offreData.length; i++) {
+      if (offreData[i][0] == packSelect) {
+        packRow = offreData[i];
+        break;
+      }
+    }
+    
+    if (!packRow) {
+      throw new Error('Offre ' + packSelect + ' introuvable dans la feuille Offre');
+    }
+    
+    Logger.log('Found pack in Offre sheet');
+    
+    // 3. Générer un code opération unique
+    const today = new Date();
+    const dateStr = Utilities.formatDate(today, Session.getScriptTimeZone(), 'yyyyMMdd');
+    const existingCodes = dataCalculeSheet.getRange(2, 1, Math.max(1, dataCalculeSheet.getLastRow() - 1), 1).getValues();
+    const todayOps = existingCodes.filter(row => row[0] && row[0].toString().includes(dateStr));
+    const opNumber = (todayOps.length + 1).toString().padStart(3, '0');
+    const codeOpe = `OPE-${packSelect}-${dateStr}-${opNumber}`;
+    
+    Logger.log('Generated operation code: ' + codeOpe);
+    
+    // 4. Calculer la marge
+    const margeNet = totalNet || 0;
+    const margePct = totalRevenue > 0 ? ((totalNet / totalRevenue) * 100).toFixed(2) + '%' : '0%';
+    
+    // 5. Préparer les données (50 colonnes)
+    Logger.log('Preparing data row with 50 columns...');
+    const distanceTotal = (distanceMedecin || 0) + (distanceInfirmier || 0) + (distanceTechRadio || 0);
+    const nbrEmployesTotal = (nbrMedecin || 0) + (nbrInfirmier || 0) + (nbrTechRadio || 0);
+    const dureeLog = (dureeMed || 0) + (dureeInf || 0) + (dureeTech || 0);
+    
+    const utilisateur = Session.getActiveUser().getEmail();
+    const dateEnregistrement = Utilities.formatDate(today, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+    
+    // Déterminer validation finance
+    const validationFinance = totalRevenue > 0 && ((totalNet / totalRevenue) * 100) >= 70 ? 'Oui' : 'En attente';
+    const dateValidation = validationFinance === 'Oui' ? Utilities.formatDate(today, Session.getScriptTimeZone(), 'yyyy-MM-dd') : '';
+    const commentaires = validationFinance === 'Oui' ? `Auto-validé (marge ${margePct})` : `En attente validation Finance (marge ${margePct})`;
+    
+    const dataRow = [
+      codeOpe,                           // Code Operation
+      packRow[2] || '',                  // Coordination (Commercial)
+      Utilities.formatDate(today, Session.getScriptTimeZone(), 'dd/MM/yyyy'), // Date Operation
+      entreprise || packRow[3] || '',    // Entreprise
+      packRow[1] || '',                  // Nom Pack
+      packRow[4] || 0,                   // Nbr Employés
+      packRow[9] || '',                  // Lieu
+      packRow[5] || '',                  // Site
+      '',                                // Deplacement
+      packRow[6] || '',                  // Paramètres
+      packRow[8] || 0,                   // Prix Total
+      medecins || '',                    // Médecin (noms)
+      infirmiers || '',                  // Infirmier (noms)
+      techRadio || '',                   // Tech Radio (noms)
+      '',                                // Matériel
+      distanceMedecin || 0,              // Distance Médecin
+      distanceInfirmier || 0,            // Distance Infirmier
+      distanceTechRadio || 0,            // Distance Tech Radio
+      0,                                 // Distance Matériel
+      medTaux || 0,                      // Taux Médecin
+      infTaux || 0,                      // Taux Infirmier
+      techTaux || 0,                     // Taux Tech Radio
+      nbrMedecin || 0,                   // Nbr Médecin
+      nbrInfirmier || 0,                 // Nbr Infirmier
+      nbrTechRadio || 0,                 // Nbr Tech Radio
+      hebergement || 'non',              // Hébergement
+      dureeMed || 0,                     // Durée Médecin
+      dureeInf || 0,                     // Durée Infirmier
+      dureeTech || 0,                    // Durée Tech Radio
+      dureeLog,                          // Durée Logistique
+      frais || 0,                        // Frais
+      chargeSupp || 0,                   // Charge Supplémentaire
+      statut || 'calculer',              // Statut
+      nbrJours || 0,                     // Nbr Jours
+      dateFin || '',                     // Date Fin
+      '',                                // Wilaya Départ Médecin
+      '',                                // Wilaya Départ Infirmier
+      '',                                // Wilaya Départ Tech Radio
+      distanceTotal,                     // Distance Total
+      nbrEmployesTotal,                  // Nbr Employés Total
+      totalRevenue || 0,                 // Total Revenue
+      totalCost || 0,                    // Total Cost
+      totalNet || 0,                     // Total Net
+      margeNet,                          // Marge Net
+      dateEnregistrement,                // Date Enregistrement
+      utilisateur,                       // Utilisateur
+      validationFinance,                 // Validation Finance
+      dateValidation,                    // Date Validation
+      commentaires,                      // Commentaires
+      margePct                           // Marge %
+    ];
+    
+    Logger.log('Data row prepared successfully');
+    
+    // 6. Ajouter la ligne à la feuille
+    Logger.log('Appending data to Data Calcule sheet...');
+    dataCalculeSheet.appendRow(dataRow);
+    Logger.log('Data saved successfully to Data Calcule sheet');
+    
+    // 7. Mettre à jour le statut dans la feuille Offre
+    Logger.log('Updating status in Offre sheet to: ' + statut);
+    for (let i = 1; i < offreData.length; i++) {
+      if (offreData[i][0] == packSelect) {
+        offreSheet.getRange(i + 1, 21).setValue(statut || 'calculer'); // Colonne 21 = Statut
+        Logger.log('Status updated successfully');
+        break;
+      }
+    }
+    
+    Logger.log('saveCalculToDataCalculeSimple completed successfully');
+    return {
+      success: true,
+      message: `Calcul sauvegardé avec succès dans Data Calcule (Code: ${codeOpe})`
+    };
+    
+  } catch (error) {
+    Logger.log('Erreur saveCalculToDataCalculeSimple: ' + error.toString());
+    return {
+      success: false,
+      message: 'Erreur lors de la sauvegarde: ' + error.toString()
+    };
+  }
+}
+
+function updatePackReals(codePack, updates) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let packSheet = ss.getSheetByName('Pack');
+  if (!packSheet) {
+    packSheet = ss.insertSheet('Pack');
+  }
+  const data = packSheet.getDataRange().getValues();
+  for (let u of updates) {
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][0] == codePack && data[i][3] === u.siteKey) {
+        const estimatedNet = Number(data[i][35]) || 0;
+        const difference = estimatedNet - u.realNet;
+        const percentage = estimatedNet > 0 ? (difference / estimatedNet * 100) : 0;
+        packSheet.getRange(i + 1, 38).setValue(u.realCost);
+        packSheet.getRange(i + 1, 39).setValue(u.realNet);
+        packSheet.getRange(i + 1, 40).setValue(difference);
+        packSheet.getRange(i + 1, 41).setValue(percentage);
+        break;
+      }
+    }
+  }
+}
+
+function updateMissionStatuses() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let dataSheet = ss.getSheetByName('Data');
+  if (!dataSheet) {
+    dataSheet = ss.insertSheet('Data');
+  }
+  const data = dataSheet.getDataRange().getValues();
+  const currentDate = new Date();
+  for (let i = 1; i < data.length; i++) {
+    let opDateRaw = data[i][2];
+  if (typeof opDateRaw === 'string') opDateRaw = new Date(opDateRaw);
+  const opDate = opDateRaw instanceof Date && !isNaN(opDateRaw.getTime()) ? opDateRaw : new Date(0);
+    let finDateRaw = data[i][37];
+  if (typeof finDateRaw === 'string') finDateRaw = new Date(finDateRaw);
+  const finDate = finDateRaw instanceof Date && !isNaN(finDateRaw.getTime()) ? finDateRaw : new Date(0);
+    let newStatus = 'Programmer';
+    if (currentDate >= opDate && currentDate < finDate) newStatus = 'en cours';
+    if (currentDate >= finDate) newStatus = 'Réaliser';
+    if (data[i][36] !== newStatus) {
+      dataSheet.getRange(i + 1, 37).setValue(newStatus); // Col AK
+    }
+  }
+}
+
+function saveOffre(coordination, dateOperation, entrepriseOffre, packSelect, dateEnreg, lieuEntreprise, deplacement, wilayaDepartMedecin, wilayaDepartInfirmier, wilayaDepartTechRadio, distanceMedecin, distanceInfirmier, distanceTechRadio, materiels, distanceMateriel, nbrInfirmier, infirmiers, medecins, nbrMedecin, techRadio, nbrTechRadio, hebergement, dureeMed, dureeInf, dureeTech, dureeLog, frais, chargeSupp, observation, statut, nbrJours, dateFin, personnelGranular, prixVisiteLieux) {
+  try {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let entrepriseSheet = ss.getSheetByName('Entreprise');
+  if (!entrepriseSheet) {
+    entrepriseSheet = ss.insertSheet('Entreprise');
+  }
+  const entrepriseData = entrepriseSheet.getDataRange().getValues();
+  let codeEntreprise = '';
+  for (let i = 1; i < entrepriseData.length; i++) {
+    if (entrepriseData[i][1] === entrepriseOffre) {
+      codeEntreprise = entrepriseData[i][0];
+      break;
+    }
+  }
+  if (!codeEntreprise) {
+    const lastRowEnt = entrepriseSheet.getLastRow();
+    codeEntreprise = lastRowEnt > 1 ? Number(entrepriseSheet.getRange(lastRowEnt, 1).getValue()) + 1 : 1;
+    entrepriseSheet.appendRow([codeEntreprise, entrepriseOffre]);
+  }
+  let dataSheet = ss.getSheetByName('Data');
+  if (!dataSheet) {
+    dataSheet = ss.insertSheet('Data');
+  }
+  if (!dateEnreg) {
+    dateEnreg = new Date().toISOString().split('T')[0];
+  }
+  const lastRow = dataSheet.getLastRow();
+  const codeOpe = lastRow > 1 ? Number(dataSheet.getRange(lastRow, 1).getValue()) + 1 : 1;
+  let baremeSheet = ss.getSheetByName('Barème');
+  if (!baremeSheet) {
+    baremeSheet = ss.insertSheet('Barème');
+  }
+  const baremeData = baremeSheet.getDataRange().getValues();
+  let bareme = '';
+  let rate = baremeSheet.getRange('A2').getValue();
+  let totalDistance = parseFloat(distanceMedecin) + parseFloat(distanceInfirmier) + parseFloat(distanceTechRadio) + parseFloat(distanceMateriel);
+  let hebergCost = (dureeMed * nbrMedecin + dureeInf * nbrInfirmier + dureeTech * nbrTechRadio + dureeLog * nbrLogistique) * frais;
+  let totalCharge = totalDistance * rate + hebergCost + chargeSupp;
+  for (let j = 1; j < baremeData.length; j++) {
+    if (totalDistance <= baremeData[j][1]) {
+      bareme = baremeData[j][0];
+      break;
+    }
+  }
+  if (!bareme && baremeData.length > 1) {
+    bareme = baremeData[baremeData.length - 1][0];
+  }
+  const valisation = 'Validée';
+  const details = getPackDetails(packSelect);
+  const total = details.totalPrix - totalCharge;
+  const opDate = new Date(dateOperation);
+  const finDateObj = new Date(dateFin);
+  const currentDate = new Date();
+  let statutMission = 'Programmer';
+  if (currentDate >= opDate && currentDate < finDateObj) statutMission = 'en cours';
+  if (currentDate >= finDateObj) statutMission = 'Réaliser';
+  const dureeString = `med:${dureeMed}|inf:${dureeInf}|tech:${dureeTech}|log:${dureeLog}`;
+  let remise = 0;
+  const bilanAct = details.acts.find(a => a.acte === 'bilan');
+  if (bilanAct) {
+    remise = bilanAct.remise || 0;
+  }
+  const personnelGranularJson = personnelGranular ? JSON.stringify(personnelGranular) : '';
+  
+  // Enregistrer dans la feuille "Data" (pour compatibilité)
+  dataSheet.appendRow([codeOpe, coordination, new Date(dateOperation), new Date(dateEnreg), entrepriseOffre, details.totalEmployes, lieuEntreprise, deplacement, wilayaDepartMedecin, wilayaDepartInfirmier, wilayaDepartTechRadio, distanceMedecin, distanceInfirmier, distanceTechRadio, materiels, distanceMateriel, nbrInfirmier, infirmiers, medecins, nbrMedecin, techRadio, nbrTechRadio, hebergement, dureeString, bareme, chargeSupp, totalCharge, valisation, observation, frais, total, statut, details.packName, nbrJours, statutMission, finDateObj, remise, details.calculeJourMedecin, details.nbrJourMedecin, details.calculeJourInfirmier, details.nbrJourInfirmier, details.calculeJourTechRadio, details.nbrJourTechRadio, personnelGranularJson]);
+
+  // Enregistrer également dans la feuille "Data Programmation"
+  let progSheet = ss.getSheetByName('Data Programmation');
+  if (!progSheet) {
+    progSheet = ss.insertSheet('Data Programmation');
+    // Ajouter les en-têtes si la feuille vient d'être créée
+    const progHeaders = [
+      'Code Operation', 'Coordination', 'Date Operation', 'Date Enregistrement',
+      'Entreprise', 'Nbr Employés', 'Lieu', 'Deplacement',
+      'Wilaya Depart Médecin', 'Wilaya Depart Infirmier', 'Wilaya Depart Tech Radio',
+      'Distance Médecin', 'Distance Infirmier', 'Distance Tech Radio',
+      'Matériels', 'Distance Matériel',
+      'Nbr Infirmier', 'Infirmiers (Noms)', 'Médecins (Noms)', 'Nbr Médecin',
+      'Tech Radio (Noms)', 'Nbr Tech Radio',
+      'Hébergement', 'Durée Mission', 'Barème', 'Charge Supplémentaire',
+      'Total Charge', 'Validation', 'Observation', 'Frais', 'Total', 'Statut',
+      'Pack Name', 'Nbr Jours', 'Statut Mission', 'Date Fin', 'Remise',
+      'Calcule Jour Médecin', 'Nbr Jour Médecin',
+      'Calcule Jour Infirmier', 'Nbr Jour Infirmier',
+      'Calcule Jour Tech Radio', 'Nbr Jour Tech Radio',
+      'Personnel Granulaire (JSON)'
+    ];
+    progSheet.getRange(1, 1, 1, progHeaders.length).setValues([progHeaders]);
+    progSheet.getRange(1, 1, 1, progHeaders.length)
+      .setBackground('#1e3d7d')
+      .setFontColor('white')
+      .setFontWeight('bold')
+      .setHorizontalAlignment('center');
+    progSheet.setFrozenRows(1);
+  }
+  
+  progSheet.appendRow([
+    codeOpe, coordination, new Date(dateOperation), new Date(dateEnreg),
+    entrepriseOffre, details.totalEmployes, lieuEntreprise, deplacement,
+    wilayaDepartMedecin, wilayaDepartInfirmier, wilayaDepartTechRadio,
+    distanceMedecin, distanceInfirmier, distanceTechRadio,
+    materiels, distanceMateriel,
+    nbrInfirmier, infirmiers, medecins, nbrMedecin,
+    techRadio, nbrTechRadio,
+    hebergement, dureeString, bareme, chargeSupp,
+    totalCharge, valisation, observation, frais, total, statut,
+    details.packName, nbrJours, statutMission, finDateObj, remise,
+    details.calculeJourMedecin, details.nbrJourMedecin,
+    details.calculeJourInfirmier, details.nbrJourInfirmier,
+    details.calculeJourTechRadio, details.nbrJourTechRadio,
+    personnelGranularJson
+  ]);
+
+  // Mise à jour des totaux pack (rémun, transport, param, Yalidine) dans la feuille Pack pour le rapprochement
+  try {
+    let packSheet = ss.getSheetByName('Pack');
+    if (!packSheet) packSheet = ss.insertSheet('Pack');
+    const dataPack = packSheet.getDataRange().getValues();
+    for (let i = 1; i < dataPack.length; i++) {
+      if (dataPack[i][0] == packSelect) {
+        // Colonnes: 25 transport, 26 param, 27 Yalidine, 24 rémun; 29-31 revenus/couts/net
+        // Ici on reprend les totaux existants calculés dans la partie Pack
+        // Si vous avez les totaux côté offre à injecter, remplacez par vos valeurs.
+        // On copie ce que le calcul Pack fournit déjà (details.*) quand disponible
+        const totalRemun = Number(details.totalRemunPack || 0);
+        const totalTransport = Number(details.totalTransportPack || totalCharge || 0);
+        const totalParam = Number(details.totalParamPack || 0);
+        const totalYalidine = Number(details.totalYalidinePack || 0);
+        const totalRevenuePack = Number(details.totalRevenuePack || details.totalPrix || 0);
+        const totalCostPack = Number(details.totalCostPack || 0);
+        const totalNetPack = Number(details.totalNetPack || (totalRevenuePack - totalCostPack));
+        packSheet.getRange(i + 1, 24).setValue(totalRemun);
+        packSheet.getRange(i + 1, 25).setValue(totalTransport);
+        packSheet.getRange(i + 1, 26).setValue(totalParam);
+        packSheet.getRange(i + 1, 27).setValue(totalYalidine);
+        packSheet.getRange(i + 1, 29).setValue(totalRevenuePack);
+        packSheet.getRange(i + 1, 30).setValue(totalCostPack);
+        packSheet.getRange(i + 1, 31).setValue(totalNetPack);
+        break;
+      }
+    }
+  } catch (e) {
+    Logger.log('update pack totals failed: ' + e);
+  }
+  createRemunEntries(codeOpe, personnelGranular);
+  updatePackStatus(packSelect, 'validé');
+  return 'Offre enregistrée.';
+  } catch (error) {
+    Logger.log('Erreur saveOffre: ' + error);
+    return 'Erreur serveur saveOffre: ' + (error && error.message ? error.message : error);
+  }
+}
+
+function createRemunEntries(codeOpe, personnelGranular) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let dataSheet = ss.getSheetByName('Data');
+  if (!dataSheet) {
+    dataSheet = ss.insertSheet('Data');
+  }
+  const lastRow = dataSheet.getLastRow();
+  const data = dataSheet.getRange(lastRow, 1, 1, dataSheet.getLastColumn()).getValues()[0];
+  const packName = data[34];
+  const packDetails = getPackDetailsByName(packName);
+  const nbrJourMed = packDetails.nbrJourMedecin;
+  const nbrJourInf = packDetails.nbrJourInfirmier;
+  const nbrJourTech = packDetails.nbrJourTechRadio;
+  const dateOp = data[2];
+  const month = dateOp.getMonth() + 1;
+  const year = dateOp.getFullYear();
+  let remunSheet = ss.getSheetByName('Rémunération');
+  if (!remunSheet) {
+    remunSheet = ss.insertSheet('Rémunération');
+  }
+  if (remunSheet.getLastRow() === 0) {
+    remunSheet.appendRow(['Type', 'FullName', 'CodeOpe', 'DateOp', 'NbrJours', 'TauxJour', 'TotalOp', 'Month', 'Year', 'Paid', 'DatePaid', 'Distance', 'Deplacement', 'Hebergement']);
+  }
+  
+  // Si personnelGranular disponible (Scénario 3), utiliser données individuelles
+  if (personnelGranular && typeof personnelGranular === 'object' && Object.keys(personnelGranular).length > 0) {
+    // Médecins granulaires
+    if (personnelGranular.medecins && Array.isArray(personnelGranular.medecins)) {
+      personnelGranular.medecins.forEach(med => {
+        const distance = med.distance || 0;
+        const deplacement = med.deplacement || 0;
+        const hebergement = med.hebergement || 0;
+        const tauxJour = med.taux || 5000;
+        const nbrJours = med.jours || nbrJourMed;
+        const totalOp = nbrJours * tauxJour;
+        remunSheet.appendRow(['med', med.nom || '', codeOpe, dateOp, nbrJours, tauxJour, totalOp, month, year, 'no', '', distance, deplacement, hebergement]);
+      });
+    }
+    // Infirmiers granulaires
+    if (personnelGranular.infirmiers && Array.isArray(personnelGranular.infirmiers)) {
+      personnelGranular.infirmiers.forEach(inf => {
+        const distance = inf.distance || 0;
+        const deplacement = inf.deplacement || 0;
+        const hebergement = inf.hebergement || 0;
+        const tauxJour = inf.taux || 4000;
+        const nbrJours = inf.jours || nbrJourInf;
+        const totalOp = nbrJours * tauxJour;
+        remunSheet.appendRow(['inf', inf.nom || '', codeOpe, dateOp, nbrJours, tauxJour, totalOp, month, year, 'no', '', distance, deplacement, hebergement]);
+      });
+    }
+    // Tech Radio granulaires
+    if (personnelGranular.techRadios && Array.isArray(personnelGranular.techRadios)) {
+      personnelGranular.techRadios.forEach(tech => {
+        const distance = tech.distance || 0;
+        const deplacement = tech.deplacement || 0;
+        const hebergement = tech.hebergement || 0;
+        const tauxJour = tech.taux || 4000;
+        const nbrJours = tech.jours || nbrJourTech;
+        const totalOp = nbrJours * tauxJour;
+        remunSheet.appendRow(['tech', tech.nom || '', codeOpe, dateOp, nbrJours, tauxJour, totalOp, month, year, 'no', '', distance, deplacement, hebergement]);
+      });
+    }
+  } else {
+    // Fallback - ancien format (compatibilité)
+    const types = [
+      {type: 'med', names: data[18], nbrJour: nbrJourMed, defaultTaux: 5000},
+      {type: 'inf', names: data[17], nbrJour: nbrJourInf, defaultTaux: 4000},
+      {type: 'tech', names: data[20], nbrJour: nbrJourTech, defaultTaux: 4000}
+    ];
+    types.forEach(t => {
+      if (t.names) {
+        t.names.split(',').forEach(name => {
+          name = name.trim();
+          if (name) {
+            const totalOp = t.nbrJour * t.defaultTaux;
+            remunSheet.appendRow([t.type, name, codeOpe, dateOp, t.nbrJour, t.defaultTaux, totalOp, month, year, 'no', '', '', '', '']);
+          }
+        });
+      }
+    });
+  }
+}
+
+function getRemunerationsData(month, year) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let remunSheet = ss.getSheetByName('Rémunération');
+  if (!remunSheet) {
+    remunSheet = ss.insertSheet('Rémunération');
+  }
+  const data = remunSheet.getDataRange().getValues();
+  let dataSheet = ss.getSheetByName('Data');
+  if (!dataSheet) {
+    dataSheet = ss.insertSheet('Data');
+  }
+  const dataData = dataSheet.getDataRange().getValues();
+  let opeToEnt = {};
+  let opeToDateStart = {};
+  let opeToDateEnd = {};
+  let opeToSite = {};
+  for (let k = 1; k < dataData.length; k++) {
+    const code = dataData[k][0];
+    opeToEnt[code] = dataData[k][4];
+    opeToDateStart[code] = safeFormatDate(dataData[k][2], ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd');
+    opeToDateEnd[code] = safeFormatDate(dataData[k][37], ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd');
+    opeToSite[code] = dataData[k][6];
+  }
+  let map = {};
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (row[7] === month && row[8] === year && row[9] === 'no') {
+      const fullName = row[1];
+      if (!map[fullName]) {
+        map[fullName] = {fullName, missions: [], totalMois: 0, nom: '', prenom: '', tel: '', wilaya: '', type: row[0]};
+        const type = row[0];
+        let sheetName;
+        if (type === 'med') sheetName = 'Médecin';
+        else if (type === 'inf') sheetName = 'Infirmier';
+        else if (type === 'tech') sheetName = 'Tech Radio';
+        if (sheetName) {
+          let persSheet = ss.getSheetByName(sheetName);
+          if (!persSheet) {
+            persSheet = ss.insertSheet(sheetName);
+          }
+          const persData = persSheet.getDataRange().getValues();
+          for (let j = 1; j < persData.length; j++) {
+            const persNom = persData[j][0];
+            const persPrenom = persData[j][1];
+            const testName1 = `${persPrenom} ${persNom}`.trim();
+            const testName2 = `${persNom} ${persPrenom}`.trim();
+            if (testName1 === fullName || testName2 === fullName) {
+              map[fullName].nom = persNom;
+              map[fullName].prenom = persPrenom;
+              map[fullName].tel = persData[j][2];
+              map[fullName].wilaya = persData[j][3];
+              break;
+            }
+          }
+        }
+      }
+      const mission = {
+        codeOpe: row[2],
+        dateOperation: safeFormatDate(row[3], ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd'),
+        nbrJours: row[4],
+        tauxParJour: row[5],
+        totalOp: row[6],
+        paid: row[9] === 'yes',
+        entreprise: opeToEnt[row[2]] || '',
+        dateStart: opeToDateStart[row[2]] || '',
+        dateEnd: opeToDateEnd[row[2]] || '',
+        site: opeToSite[row[2]] || ''
+      };
+      map[fullName].missions.push(mission);
+      map[fullName].totalMois += row[6];
+    }
+  }
+  return Object.values(map);
+}
+
+function getPaidRemunerationsData(month, year) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let remunSheet = ss.getSheetByName('Rémunération');
+  if (!remunSheet) {
+    remunSheet = ss.insertSheet('Rémunération');
+  }
+  const data = remunSheet.getDataRange().getValues();
+  let dataSheet = ss.getSheetByName('Data');
+  if (!dataSheet) {
+    dataSheet = ss.insertSheet('Data');
+  }
+  const dataData = dataSheet.getDataRange().getValues();
+  let opeToEnt = {};
+  let opeToDateStart = {};
+  let opeToDateEnd = {};
+  let opeToSite = {};
+  for (let k = 1; k < dataData.length; k++) {
+    const code = dataData[k][0];
+    opeToEnt[code] = dataData[k][4];
+    opeToDateStart[code] = safeFormatDate(dataData[k][2], ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd');
+    opeToDateEnd[code] = safeFormatDate(dataData[k][37], ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd');
+    opeToSite[code] = dataData[k][6];
+  }
+  let map = {};
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (row[7] === month && row[8] === year && row[9] === 'yes') {
+      const fullName = row[1];
+      if (!map[fullName]) {
+        map[fullName] = {fullName, missions: [], totalMois: 0, nom: '', prenom: '', tel: '', wilaya: '', type: row[0]};
+        const type = row[0];
+        let sheetName;
+        if (type === 'med') sheetName = 'Médecin';
+        else if (type === 'inf') sheetName = 'Infirmier';
+        else if (type === 'tech') sheetName = 'Tech Radio';
+        if (sheetName) {
+          let persSheet = ss.getSheetByName(sheetName);
+          if (!persSheet) {
+            persSheet = ss.insertSheet(sheetName);
+          }
+          const persData = persSheet.getDataRange().getValues();
+          for (let j = 1; j < persData.length; j++) {
+            const persNom = persData[j][0];
+            const persPrenom = persData[j][1];
+            const testName1 = `${persPrenom} ${persNom}`.trim();
+            const testName2 = `${persNom} ${persPrenom}`.trim();
+            if (testName1 === fullName || testName2 === fullName) {
+              map[fullName].nom = persNom;
+              map[fullName].prenom = persPrenom;
+              map[fullName].tel = persData[j][2];
+              map[fullName].wilaya = persData[j][3];
+              break;
+            }
+          }
+        }
+      }
+      const mission = {
+        codeOpe: row[2],
+        dateOperation: safeFormatDate(row[3], ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd'),
+        nbrJours: row[4],
+        tauxParJour: row[5],
+        totalOp: row[6],
+        paid: row[9] === 'yes',
+        entreprise: opeToEnt[row[2]] || '',
+        dateStart: opeToDateStart[row[2]] || '',
+        dateEnd: opeToDateEnd[row[2]] || '',
+        site: opeToSite[row[2]] || ''
+      };
+      map[fullName].missions.push(mission);
+      map[fullName].totalMois += row[6];
+    }
+  }
+  return Object.values(map);
+}
+
+function saveRemunerations(updates) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let remunSheet = ss.getSheetByName('Rémunération');
+  if (!remunSheet) {
+    remunSheet = ss.insertSheet('Rémunération');
+  }
+  const data = remunSheet.getDataRange().getValues();
+  for (let update of updates) {
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][1] === update.personnel && data[i][2] == update.codeOpe) {
+        const newTaux = update.tauxParJour;
+        const nbrJours = data[i][4];
+        const newTotal = newTaux * nbrJours;
+        remunSheet.getRange(i + 1, 6).setValue(newTaux);
+        remunSheet.getRange(i + 1, 7).setValue(newTotal);
+        break;
+      }
+    }
+  }
+}
+
+function markAsPaid(personnel, month, year) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let remunSheet = ss.getSheetByName('Rémunération');
+  if (!remunSheet) {
+    remunSheet = ss.insertSheet('Rémunération');
+  }
+  let paiementsSheet = ss.getSheetByName('Paiements');
+  if (!paiementsSheet) {
+    paiementsSheet = ss.insertSheet('Paiements');
+  }
+  if (paiementsSheet.getLastRow() === 0) {
+    paiementsSheet.appendRow(['Personnel', 'Month', 'Year', 'Total Paid', 'Date Paid']);
+  }
+  const data = remunSheet.getDataRange().getValues();
+  let totalPaid = 0;
+  let alreadyPaid = false;
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][1] === personnel && data[i][7] === month && data[i][8] === year) {
+      if (data[i][9] === 'yes') {
+        alreadyPaid = true;
+      }
+      totalPaid += data[i][6];
+      remunSheet.getRange(i + 1, 10).setValue('yes');
+      remunSheet.getRange(i + 1, 11).setValue(new Date());
+    }
+  }
+  if (alreadyPaid) {
+    return 'Déjà payé.';
+  }
+  paiementsSheet.appendRow([personnel, month, year, totalPaid, new Date()]);
+  return 'Payé marqué avec succès.';
+}
+
+function addToSheet(sheetName, values) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+  }
+  
+  // Vérifier si les en-têtes existent, sinon les ajouter
+  const lastRow = sheet.getLastRow();
+  if (lastRow === 0) {
+    // Pas de données, ajouter les en-têtes selon le type de feuille
+    const headers = getHeadersForSheet(sheetName);
+    if (headers.length > 0) {
+      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+      sheet.getRange(1, 1, 1, headers.length)
+        .setBackground('#1e3d7d')
+        .setFontColor('white')
+        .setFontWeight('bold')
+        .setHorizontalAlignment('center');
+      sheet.setFrozenRows(1);
+    }
+  }
+  
+  const currentLastRow = sheet.getLastRow();
+  const code = currentLastRow > 1 ? Number(sheet.getRange(currentLastRow, 1).getValue()) + 1 : 1;
+  if (typeof values === 'string') values = [values];
+  sheet.appendRow([code, ...values]);
+  return 'Ajouté avec succès.';
+}
+
+/**
+ * Retourne les en-têtes appropriés pour une feuille donnée
+ * @param {string} sheetName - Nom de la feuille
+ * @return {Array} - Tableau des en-têtes
+ */
+function getHeadersForSheet(sheetName) {
+  const headersMap = {
+    'Médecin': ['Code', 'Nom', 'Prénom', 'Téléphone', 'Wilaya'],
+    'Infirmier': ['Code', 'Nom', 'Prénom', 'Téléphone', 'Wilaya'],
+    'Tech Radio': ['Code', 'Nom', 'Prénom', 'Téléphone', 'Wilaya'],
+    'Coordination': ['Code', 'Nom'],
+    'Materiel': ['Code', 'Nom'],
+    'Entreprise': ['Code', 'Nom'],
+    'Commercial': ['Code', 'Nom', 'Prénom', 'Email', 'Entreprises'],
+    'Wilaya': ['Code', 'Nom']
+  };
+  
+  return headersMap[sheetName] || [];
+}
+
+function getData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  updateMissionStatuses();
+  let dataSheet = ss.getSheetByName('Data');
+  if (!dataSheet) {
+    dataSheet = ss.insertSheet('Data');
+  }
+  const timeZone = ss.getSpreadsheetTimeZone();
+  const data = dataSheet.getDataRange().getValues();
+  const missions = [];
+  for (let i = 1; i < data.length; i++) {
+    missions.push({
+      codeOpe: data[i][0],
+      coordination: data[i][1],
+      dateOperation: safeFormatDate(data[i][2], timeZone, 'yyyy-MM-dd'),
+      dateEnreg: safeFormatDate(data[i][3], timeZone, 'yyyy-MM-dd'),
+      entreprise: data[i][4],
+      nbrEmployes: data[i][5],
+      lieu: data[i][6],
+      deplacement: data[i][7],
+      medecins: data[i][18],
+      infirmiers: data[i][17],
+      techRadio: data[i][20],
+      materiels: data[i][14],
+      totalCharge: data[i][28],
+      totalNet: data[i][32],
+      statut: data[i][33],
+      pack: data[i][34],
+      dureeMission: data[i][35],
+      statutMission: data[i][36],
+      dateFin: safeFormatDate(data[i][37], timeZone, 'yyyy-MM-dd')
+    });
+  }
+  return missions;
+}
+
+function getMissionDetails(codeOpe) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let dataSheet = ss.getSheetByName('Data');
+  if (!dataSheet) {
+    dataSheet = ss.insertSheet('Data');
+  }
+  const timeZone = ss.getSpreadsheetTimeZone();
+  const data = dataSheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] == codeOpe) {
+      const dureeString = data[i][25] || '';
+      let dureeParsed = {med: 0, inf: 0, tech: 0, log: 0};
+      if (dureeString.includes('|')) {
+        dureeString.split('|').forEach(part => {
+          const [key, val] = part.split(':');
+          if (key && val) dureeParsed[key] = parseInt(val) || 0;
+        });
+      } else {
+        dureeParsed.med = parseInt(dureeString) || 0; // Compat ancien
+      }
+      return {
+        codeOpe: data[i][0],
+        coordination: data[i][1],
+        dateOperation: safeFormatDate(data[i][2], timeZone, 'yyyy-MM-dd'),
+        dateEnreg: safeFormatDate(data[i][3], timeZone, 'yyyy-MM-dd'),
+        entreprise: data[i][4],
+        nbrEmployes: data[i][5],
+        lieu: data[i][6],
+        deplacement: data[i][7],
+        wilayaDepartMedecin: data[i][8],
+        wilayaDepartInfirmier: data[i][9],
+        wilayaDepartTechRadio: data[i][10],
+        distanceMedecin: data[i][11],
+        distanceInfirmier: data[i][12],
+        distanceTechRadio: data[i][13],
+        materiels: data[i][14],
+        distanceMateriel: data[i][15],
+        nbrInfirmier: data[i][16],
+        infirmiers: data[i][17],
+        medecins: data[i][18],
+        nbrMedecin: data[i][19],
+        techRadio: data[i][20],
+        nbrTechRadio: data[i][21],
+        hebergement: data[i][24],
+        dureeMed: dureeParsed.med,
+        dureeInf: dureeParsed.inf,
+        dureeTech: dureeParsed.tech,
+        dureeLog: dureeParsed.log,
+        chargeSupp: data[i][27],
+        frais: data[i][31],
+        observation: data[i][30],
+        statutMission: data[i][36],
+        dateFin: safeFormatDate(data[i][37], timeZone, 'yyyy-MM-dd'),
+        pack: data[i][34],
+        dureeMission: data[i][35],
+        packTotalPrix: data[i][32] + data[i][28], // Reconstruction approximative si besoin
+        remise: data[i][38] || 0
+      };
+    }
+  }
+  return null;
+}
+
+function updateMission(updatedData) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let dataSheet = ss.getSheetByName('Data');
+  if (!dataSheet) {
+    dataSheet = ss.insertSheet('Data');
+  }
+  const data = dataSheet.getDataRange().getValues();
+  let rowIndex = -1;
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] == updatedData.codeOpe) {
+      rowIndex = i + 1;
+      break;
+    }
+  }
+  if (rowIndex === -1) return 'Mission non trouvée.';
+  if (data[rowIndex - 1][36] === 'Réaliser') return 'Les missions réalisées ne peuvent pas être modifiées.';
+  
+  // Capture original state before modification for audit trail
+  const originalState = {
+    codeOpe: data[rowIndex - 1][0],
+    coordination: data[rowIndex - 1][1],
+    dateOperation: data[rowIndex - 1][2],
+    nbrEmployes: data[rowIndex - 1][5],
+    lieu: data[rowIndex - 1][6],
+    deplacement: data[rowIndex - 1][7],
+    distanceMedecin: data[rowIndex - 1][11],
+    distanceInfirmier: data[rowIndex - 1][12],
+    distanceTechRadio: data[rowIndex - 1][13],
+    nbrMedecin: data[rowIndex - 1][19],
+    nbrInfirmier: data[rowIndex - 1][16],
+    nbrTechRadio: data[rowIndex - 1][21],
+    medecins: data[rowIndex - 1][18],
+    infirmiers: data[rowIndex - 1][17],
+    techRadio: data[rowIndex - 1][20],
+    dureeMed: data[rowIndex - 1][25] ? parseFloat(data[rowIndex - 1][25].toString().split('|')[0].split(':')[1]) : 0,
+    dureeInf: data[rowIndex - 1][25] ? parseFloat(data[rowIndex - 1][25].toString().split('|')[1].split(':')[1]) : 0,
+    dureeTech: data[rowIndex - 1][25] ? parseFloat(data[rowIndex - 1][25].toString().split('|')[2].split(':')[1]) : 0,
+    dureeLog: data[rowIndex - 1][25] ? parseFloat(data[rowIndex - 1][25].toString().split('|')[3].split(':')[1]) : 0,
+    totalCharge: data[rowIndex - 1][28],
+    dateFin: data[rowIndex - 1][37]
+  };
+  // Recalculer bareme, totalCharge, totalNet
+  let baremeSheet = ss.getSheetByName('Barème');
+  if (!baremeSheet) {
+    baremeSheet = ss.insertSheet('Barème');
+  }
+  const baremeData = baremeSheet.getDataRange().getValues();
+  let bareme = '';
+  let rate = baremeSheet.getRange('A2').getValue();
+  let totalDistance = parseFloat(updatedData.distanceMedecin) + parseFloat(updatedData.distanceInfirmier) + parseFloat(updatedData.distanceTechRadio) + parseFloat(updatedData.distanceMateriel);
+  let hebergCost = (updatedData.dureeMed * updatedData.nbrMedecin + updatedData.dureeInf * updatedData.nbrInfirmier + updatedData.dureeTech * updatedData.nbrTechRadio + updatedData.dureeLog * updatedData.nbrLogistique) * updatedData.frais;
+  let totalCharge = totalDistance * rate + hebergCost + updatedData.chargeSupp;
+  for (let j = 1; j < baremeData.length; j++) {
+    if (totalDistance <= baremeData[j][1]) {
+      bareme = baremeData[j][0];
+      break;
+    }
+  }
+  if (!bareme && baremeData.length > 1) {
+    bareme = baremeData[baremeData.length - 1][0];
+  }
+  const packDetails = getPackDetailsByName(updatedData.pack); // Assumer fonction pour obtenir par nom si besoin
+  const total = packDetails.totalPrix - totalCharge; // Si pack fixe, utiliser ancien ou recalculer si actes changent (mais pas changé ici)
+  const opDate = new Date(updatedData.dateOperation);
+  const finDate = new Date(updatedData.dateFin);
+  let statutMission = 'Programmer';
+  const currentDate = new Date();
+  if (currentDate >= opDate && currentDate < finDate) statutMission = 'en cours';
+  if (currentDate >= finDate) statutMission = 'Réaliser';
+  const dureeString = `med:${updatedData.dureeMed}|inf:${updatedData.dureeInf}|tech:${updatedData.dureeTech}|log:${updatedData.dureeLog}`;
+  // Mettre à jour la ligne
+  dataSheet.getRange(rowIndex, 2).setValue(updatedData.coordination);
+  dataSheet.getRange(rowIndex, 3).setValue(new Date(updatedData.dateOperation));
+  dataSheet.getRange(rowIndex, 7).setValue(updatedData.lieu);
+  dataSheet.getRange(rowIndex, 8).setValue(updatedData.deplacement);
+  dataSheet.getRange(rowIndex, 6).setValue(updatedData.nbrEmployes);
+  dataSheet.getRange(rowIndex, 9).setValue(updatedData.wilayaDepartMedecin);
+  dataSheet.getRange(rowIndex, 10).setValue(updatedData.wilayaDepartInfirmier);
+  dataSheet.getRange(rowIndex, 11).setValue(updatedData.wilayaDepartTechRadio);
+  dataSheet.getRange(rowIndex, 12).setValue(updatedData.distanceMedecin);
+  dataSheet.getRange(rowIndex, 13).setValue(updatedData.distanceInfirmier);
+  dataSheet.getRange(rowIndex, 14).setValue(updatedData.distanceTechRadio);
+  dataSheet.getRange(rowIndex, 15).setValue(updatedData.materiels);
+  dataSheet.getRange(rowIndex, 16).setValue(updatedData.distanceMateriel);
+  dataSheet.getRange(rowIndex, 17).setValue(updatedData.nbrInfirmier);
+  dataSheet.getRange(rowIndex, 18).setValue(updatedData.infirmiers);
+  dataSheet.getRange(rowIndex, 19).setValue(updatedData.medecins);
+  dataSheet.getRange(rowIndex, 20).setValue(updatedData.nbrMedecin);
+  dataSheet.getRange(rowIndex, 21).setValue(updatedData.techRadio);
+  dataSheet.getRange(rowIndex, 22).setValue(updatedData.nbrTechRadio);
+  dataSheet.getRange(rowIndex, 25).setValue(updatedData.hebergement);
+  dataSheet.getRange(rowIndex, 26).setValue(dureeString);
+  dataSheet.getRange(rowIndex, 27).setValue(bareme);
+  dataSheet.getRange(rowIndex, 28).setValue(updatedData.chargeSupp);
+  dataSheet.getRange(rowIndex, 29).setValue(totalCharge);
+  dataSheet.getRange(rowIndex, 31).setValue(updatedData.observation);
+  dataSheet.getRange(rowIndex, 32).setValue(updatedData.frais);
+  dataSheet.getRange(rowIndex, 33).setValue(total);
+  dataSheet.getRange(rowIndex, 36).setValue(updatedData.dureeMission);
+  dataSheet.getRange(rowIndex, 37).setValue(statutMission);
+  dataSheet.getRange(rowIndex, 38).setValue(new Date(updatedData.dateFin));
+  
+  // Log detailed operation modifications to audit trail
+  const changes = [];
+  if (originalState.coordination !== updatedData.coordination) changes.push(`Coordination: "${originalState.coordination}" → "${updatedData.coordination}"`);
+  if (originalState.dateOperation.toString() !== new Date(updatedData.dateOperation).toString()) changes.push(`Date opération modifiée`);
+  if (originalState.nbrEmployes !== updatedData.nbrEmployes) changes.push(`Nombre employés: ${originalState.nbrEmployes} → ${updatedData.nbrEmployes}`);
+  if (originalState.lieu !== updatedData.lieu) changes.push(`Lieu: "${originalState.lieu}" → "${updatedData.lieu}"`);
+  if (originalState.nbrMedecin !== updatedData.nbrMedecin) changes.push(`Médecins: ${originalState.nbrMedecin} → ${updatedData.nbrMedecin}`);
+  if (originalState.nbrInfirmier !== updatedData.nbrInfirmier) changes.push(`Infirmiers: ${originalState.nbrInfirmier} → ${updatedData.nbrInfirmier}`);
+  if (originalState.nbrTechRadio !== updatedData.nbrTechRadio) changes.push(`Tech Radio: ${originalState.nbrTechRadio} → ${updatedData.nbrTechRadio}`);
+  if (originalState.medecins !== updatedData.medecins) changes.push(`Liste médecins modifiée`);
+  if (originalState.infirmiers !== updatedData.infirmiers) changes.push(`Liste infirmiers modifiée`);
+  if (originalState.techRadio !== updatedData.techRadio) changes.push(`Liste tech radio modifiée`);
+  if (originalState.dureeMed !== updatedData.dureeMed) changes.push(`Durée médecins: ${originalState.dureeMed} → ${updatedData.dureeMed} jours`);
+  if (originalState.dureeInf !== updatedData.dureeInf) changes.push(`Durée infirmiers: ${originalState.dureeInf} → ${updatedData.dureeInf} jours`);
+  if (originalState.dureeTech !== updatedData.dureeTech) changes.push(`Durée tech radio: ${originalState.dureeTech} → ${updatedData.dureeTech} jours`);
+  if (originalState.dateFin.toString() !== new Date(updatedData.dateFin).toString()) changes.push(`Date fin modifiée`);
+  
+  const chargeChanged = Math.abs(parseFloat(originalState.totalCharge) - totalCharge) > 0.01;
+  if (chargeChanged) changes.push(`Charge totale: ${originalState.totalCharge.toFixed(2)} → ${totalCharge.toFixed(2)} DZD`);
+  
+  if (changes.length > 0) {
+    const logEntry = {
+      timestamp: new Date(),
+      user: 'Coordination', // Will be replaced by actual user in frontend
+      role: 'Coordination',
+      action: 'Modification Opération',
+      details: `Code Opération ${updatedData.codeOpe}: ${changes.join(' | ')}`
+    };
+    logOperationModification(logEntry);
+  }
+  
+  return 'Mission mise à jour avec succès.';
+}
+
+// Log operation modifications to audit trail with detailed tracking
+function logOperationModification(logEntry) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let auditSheet = ss.getSheetByName('Audit');
+  if (!auditSheet) {
+    auditSheet = ss.insertSheet('Audit');
+    auditSheet.appendRow(['Timestamp', 'User', 'Role', 'Action', 'Details']);
+  }
+  
+  const timeZone = ss.getSpreadsheetTimeZone();
+  const formattedDate = Utilities.formatDate(logEntry.timestamp, timeZone, 'yyyy-MM-dd HH:mm:ss');
+  
+  auditSheet.appendRow([
+    formattedDate,
+    logEntry.user,
+    logEntry.role,
+    logEntry.action,
+    logEntry.details
+  ]);
+}
+
+// Fonction auxiliaire si besoin pour getPackDetails par nom (si pack name unique)
+function getPackDetailsByName(packName) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let packSheet = ss.getSheetByName('Pack');
+  if (!packSheet) {
+    packSheet = ss.insertSheet('Pack');
+  }
+  const data = packSheet.getDataRange().getValues();
+  let totalPrix = 0;
+  let codePack = '';
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][1] === packName) {
+      codePack = data[i][0];
+      break;
+    }
+  }
+  if (codePack) return getPackDetails(codePack);
+  return {totalPrix: totalPrix};
+}
+
+function addActe(parametre, coutUnitaire, majoration, prixPublic, sousTraitance, famille) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let acteSheet = ss.getSheetByName('acte');
+  if (!acteSheet) {
+    acteSheet = ss.insertSheet('acte');
+  }
+  const lastRow = acteSheet.getLastRow();
+  const code = lastRow > 1 ? Number(acteSheet.getRange(lastRow, 1).getValue()) + 1 : 1;
+  acteSheet.appendRow([code, parametre, coutUnitaire, majoration, prixPublic, sousTraitance, famille]);
+  return 'Acte ajouté avec succès.';
+}
+
+function updateActe(code, parametre, coutUnitaire, majoration, prixPublic, sousTraitance, famille) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let acteSheet = ss.getSheetByName('acte');
+  if (!acteSheet) {
+    acteSheet = ss.insertSheet('acte');
+  }
+  const data = acteSheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] == code) {
+      acteSheet.getRange(i + 1, 2).setValue(parametre);
+      acteSheet.getRange(i + 1, 3).setValue(coutUnitaire);
+      acteSheet.getRange(i + 1, 4).setValue(majoration);
+      acteSheet.getRange(i + 1, 5).setValue(prixPublic);
+      acteSheet.getRange(i + 1, 6).setValue(sousTraitance);
+      acteSheet.getRange(i + 1, 7).setValue(famille);
+      return 'Acte mis à jour.';
+    }
+  }
+  return 'Acte non trouvé.';
+}
+
+function deleteActe(code) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let acteSheet = ss.getSheetByName('acte');
+  if (!acteSheet) {
+    acteSheet = ss.insertSheet('acte');
+  }
+  const data = acteSheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] == code) {
+      acteSheet.deleteRow(i + 1);
+      return 'Acte supprimé.';
+    }
+  }
+  return 'Acte non trouvé.';
+}
+
+function getCoordinateursFull() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('Coordination');
+  if (!sheet) {
+    sheet = ss.insertSheet('Coordination');
+  }
+  const data = sheet.getDataRange().getValues();
+  const list = [];
+  for (let i = 1; i < data.length; i++) {
+    list.push({
+      code: data[i][0],
+      nom: data[i][1]
+    });
+  }
+  return list;
+}
+
+function getMaterielsFull() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('Materiel');
+  if (!sheet) {
+    sheet = ss.insertSheet('Materiel');
+  }
+  const data = sheet.getDataRange().getValues();
+  const list = [];
+  for (let i = 1; i < data.length; i++) {
+    list.push({
+      code: data[i][0],
+      nom: data[i][1]
+    });
+  }
+  return list;
+}
+
+function getEntreprisesFull() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('Entreprise');
+  if (!sheet) {
+    sheet = ss.insertSheet('Entreprise');
+  }
+  const data = sheet.getDataRange().getValues();
+  const list = [];
+  for (let i = 1; i < data.length; i++) {
+    list.push({
+      code: data[i][0],
+      nom: data[i][1]
+    });
+  }
+  return list;
+}
+
+function updateItem(sheetName, code, value) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+  }
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] == code) {
+      sheet.getRange(i + 1, 2).setValue(value);
+      return 'Mis à jour.';
+    }
+  }
+  return 'Non trouvé.';
+}
+
+function deleteItem(sheetName, code) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+  }
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] == code) {
+      sheet.deleteRow(i + 1);
+      return 'Supprimé.';
+    }
+  }
+  return 'Non trouvé.';
+}
+
+function updatePersonnel(sheetName, code, nom, prenom, tel, wilaya) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+  }
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] == code) {
+      sheet.getRange(i + 1, 2).setValue(nom);
+      sheet.getRange(i + 1, 3).setValue(prenom);
+      sheet.getRange(i + 1, 4).setValue(tel);
+      sheet.getRange(i + 1, 5).setValue(wilaya);
+      return 'Mis à jour.';
+    }
+  }
+  return 'Non trouvé.';
+}
+
+// Commercial management functions
+function addCommercial(nom, prenom, email) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('Commercial');
+  if (!sheet) {
+    sheet = ss.insertSheet('Commercial');
+    sheet.appendRow(['Code', 'Nom', 'Prénom', 'Email', 'Entreprises']);
+  }
+  const lastRow = sheet.getLastRow();
+  const code = lastRow > 1 ? Number(sheet.getRange(lastRow, 1).getValue()) + 1 : 1;
+  sheet.appendRow([code, nom, prenom, email, '']);
+  return 'Commercial ajouté avec succès.';
+}
+
+function getCommerciauxFull() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('Commercial');
+  if (!sheet) {
+    sheet = ss.insertSheet('Commercial');
+    sheet.appendRow(['Code', 'Nom', 'Prénom', 'Email', 'Entreprises']);
+    return [];
+  }
+  const data = sheet.getDataRange().getValues();
+  const list = [];
+  for (let i = 1; i < data.length; i++) {
+    list.push({
+      code: data[i][0],
+      nom: data[i][1],
+      prenom: data[i][2],
+      email: data[i][3],
+      entreprises: data[i][4] || ''
+    });
+  }
+  return list;
+}
+
+function getCommerciauxList() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('Commercial');
+  if (!sheet) {
+    return [];
+  }
+  const data = sheet.getDataRange().getValues();
+  const list = [];
+  for (let i = 1; i < data.length; i++) {
+    const fullName = `${data[i][2]} ${data[i][1]}`.trim(); // Prenom Nom
+    if (fullName) list.push(fullName);
+  }
+  return list;
+}
+
+function updateCommercial(code, nom, prenom, email) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('Commercial');
+  if (!sheet) {
+    return 'Sheet non trouvée.';
+  }
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] == code) {
+      sheet.getRange(i + 1, 2).setValue(nom);
+      sheet.getRange(i + 1, 3).setValue(prenom);
+      sheet.getRange(i + 1, 4).setValue(email);
+      return 'Mis à jour.';
+    }
+  }
+  return 'Non trouvé.';
+}
+
+function associateEntrepriseToCommercial(commercialCode, entreprise) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('Commercial');
+  if (!sheet) {
+    return 'Commercial sheet not found.';
+  }
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] == commercialCode) {
+      const currentEntreprises = data[i][4] || '';
+      const entreprisesList = currentEntreprises ? currentEntreprises.split(',') : [];
+      if (!entreprisesList.includes(entreprise)) {
+        entreprisesList.push(entreprise);
+        sheet.getRange(i + 1, 5).setValue(entreprisesList.join(','));
+      }
+      return 'Entreprise associée.';
+    }
+  }
+  return 'Commercial non trouvé.';
+}
+
+function getCommercialForEntreprise(entreprise) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('Commercial');
+  if (!sheet) {
+    return null;
+  }
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    const entreprises = data[i][4] || '';
+    if (entreprises.split(',').includes(entreprise)) {
+      return {
+        code: data[i][0],
+        nom: data[i][1],
+        prenom: data[i][2],
+        fullName: `${data[i][2]} ${data[i][1]}`
+      };
+    }
+  }
+  return null;
+}
+
+// New functions for data tabs
+function getAllPacksData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let packSheet = ss.getSheetByName('Pack');
+  if (!packSheet) {
+    packSheet = ss.insertSheet('Pack');
+  }
+  const data = packSheet.getDataRange().getValues();
+  const packs = [];
+  for (let i = 1; i < data.length; i++) {
+    const totalRevenue = Number(data[i][33]) || Number(data[i][29]) || 0;
+    const totalCost = Number(data[i][34]) || 0;
+    const totalNet = Number(data[i][35]) || (totalRevenue - totalCost);
+    const paramPack = Number(data[i][37]) || 0;
+    const yalidinePack = Number(data[i][38]) || 0;
+    const totalRemun = Number(data[i][39]) || 0;
+    const chargeLogistique = Number(data[i][40]) || 0;
+    const chargeSupp = Number(data[i][31]) || 0;
+    const totalChargePanel = Number(data[i][32]) || 0;
+    packs.push({
+      codePack: data[i][0],
+      packName: data[i][1],
+      entreprise: data[i][2],
+      status: data[i][10] || 'à calculer',
+      nbrEmployes: data[i][8] || 0,
+      lieu: data[i][9] || '',
+      totalPrix: data[i][7] || 0,
+      totalRevenue,
+      totalCost,
+      totalNet,
+      dateEnreg: safeFormatDate(data[i][36], ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd') || '',
+      realCost: data[i][43] || 0,
+      realNet: data[i][44] || 0,
+      paramPack,
+      yalidinePack,
+      totalRemun,
+      chargeLogistique,
+      chargeSupp,
+      totalChargePanel,
+      difference: totalRevenue - totalCost,
+      percentage: totalRevenue ? ((totalNet / totalRevenue) * 100) : 0
+    });
+  }
+  return packs;
+}
+
+function getAllCalculeData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let packSheet = ss.getSheetByName('Pack');
+  if (!packSheet) {
+    packSheet = ss.insertSheet('Pack');
+  }
+  const tz = ss.getSpreadsheetTimeZone();
+  const data = packSheet.getDataRange().getValues();
+  const byCode = new Map();
+
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][10] !== 'calculer') continue; // status column
+
+    const codePack = data[i][0];
+    if (!codePack && codePack !== 0) continue;
+    const packName = data[i][1] || '';
+    const entreprise = data[i][2] || '';
+    const lieu = data[i][9] || '';
+    const totalPrixRow = Number(data[i][7]) || 0;
+    const totalRevenueRow = Number(data[i][33] || data[i][7] || 0) || 0;
+    const totalCostRow = Number(data[i][34]) || 0;
+    const totalNetRow = Number(data[i][35]) || (totalRevenueRow - totalCostRow);
+    const dateEnreg = safeFormatDate(data[i][36], tz, 'yyyy-MM-dd') || '';
+    const dateCalcul = safeFormatDate(data[i][12] || new Date(), tz, 'yyyy-MM-dd');
+    const nbrMed = Number(data[i][18]) || 0;
+    const nbrInf = Number(data[i][19]) || 0;
+    const nbrTech = Number(data[i][20]) || 0;
+
+    if (!byCode.has(codePack)) {
+      byCode.set(codePack, {
+        codePack,
+        packName,
+        entreprise,
+        lieu,
+        status: 'calculer',
+        totalPrix: 0,
+        totalRevenue: 0,
+        totalCost: 0,
+        totalNet: 0,
+        dateEnreg,
+        dateCreation: dateEnreg,
+        dateCalcul,
+        nbrMedecin: nbrMed,
+        nbrInfirmier: nbrInf,
+        nbrTechRadio: nbrTech
+      });
+    }
+
+    const row = byCode.get(codePack);
+    row.totalPrix += totalPrixRow;
+    row.totalRevenue += totalRevenueRow;
+    row.totalCost += totalCostRow;
+    row.totalNet += totalNetRow;
+    row.lieu = row.lieu || lieu;
+    row.dateEnreg = row.dateEnreg || dateEnreg;
+    row.dateCreation = row.dateCreation || dateEnreg;
+    row.dateCalcul = row.dateCalcul || dateCalcul;
+    row.nbrMedecin = Math.max(row.nbrMedecin || 0, nbrMed);
+    row.nbrInfirmier = Math.max(row.nbrInfirmier || 0, nbrInf);
+    row.nbrTechRadio = Math.max(row.nbrTechRadio || 0, nbrTech);
+  }
+
+  return Array.from(byCode.values());
+}
+
+function getNotifications() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let packSheet = ss.getSheetByName('Pack');
+  if (!packSheet) {
+    packSheet = ss.insertSheet('Pack');
+  }
+  const data = packSheet.getDataRange().getValues();
+  let nonCalcule = 0;
+  let calculeThisMonth = 0;
+  const currentMonth = new Date().getMonth() + 1;
+  const currentYear = new Date().getFullYear();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][10] === 'à calculer') nonCalcule++;
+    if (data[i][10] === 'calculer' && data[i][13] === currentMonth && data[i][14] === currentYear) calculeThisMonth++; // Assume columns for month/year if added
+  }
+  return {nonCalcule, calcule: calculeThisMonth};
+}
+
+// === USER MANAGEMENT (Feuille "users") ===
+function ensureUsersSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('users');
+  if (!sheet) {
+    sheet = ss.insertSheet('users');
+    sheet.appendRow(['Code', 'Username', 'Password', 'Role', 'Tabs', 'Permissions', 'CreatedAt']);
+  }
+  return sheet;
+}
+
+function getNextUserCode(data) {
+  let maxCode = 0;
+  for (let i = 1; i < data.length; i++) {
+    const c = Number(data[i][0]);
+    if (!isNaN(c) && c > maxCode) maxCode = c;
+  }
+  return maxCode + 1;
+}
+
+function saveUserAccount(username, password, role, allowedTabs, permissions) {
+  if (!username || !password || !role) {
+    return 'Nom d’utilisateur, mot de passe et rôle sont obligatoires.';
+  }
+  const sheet = ensureUsersSheet();
+  const data = sheet.getDataRange().getValues();
+  let rowIndex = -1;
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][1] === username) {
+      rowIndex = i + 1;
+      break;
+    }
+  }
+  const tabsStr = Array.isArray(allowedTabs) ? allowedTabs.join(',') : '';
+  const permsStr = Array.isArray(permissions) ? permissions.join(',') : '';
+  if (rowIndex > 0) {
+    sheet.getRange(rowIndex, 2, 1, 5).setValues([[String(username), String(password), role, tabsStr, permsStr]]);
+  } else {
+    const code = getNextUserCode(data);
+    sheet.appendRow([code, String(username), String(password), role, tabsStr, permsStr, new Date()]);
+  }
+  return 'Utilisateur sauvegardé';
+}
+
+function getUsers() {
+  const sheet = ensureUsersSheet();
+  const data = sheet.getDataRange().getValues();
+  const users = [];
+  for (let i = 1; i < data.length; i++) {
+    users.push({
+      code: data[i][0],
+      username: data[i][1],
+      role: data[i][3],
+      tabs: (data[i][4] || '').toString().split(',').filter(Boolean),
+      permissions: (data[i][5] || '').toString().split(',').filter(Boolean)
+    });
+  }
+  return users;
+}
+
+function deleteUserAccount(username) {
+  const sheet = ensureUsersSheet();
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if ((data[i][1] || '').toString() === username) {
+      sheet.deleteRow(i + 1);
+      return 'Utilisateur supprimé';
+    }
+  }
+  return 'Utilisateur introuvable';
+}
+
+function authenticateUser(username, password) {
+  const sheet = ensureUsersSheet();
+  const data = sheet.getDataRange().getValues();
+  const userCount = data.slice(1).filter(r => r[1]).length;
+  if (userCount === 0 && username?.toString().trim() === 'admin' && password?.toString() === 'admin') {
+    return {
+      username: 'admin',
+      password: 'admin',
+      role: 'admin',
+      tabs: [],
+      permissions: ['ajouter', 'modifier', 'supprimer', 'consulter']
+    };
+  }
+  const u = username?.toString().trim() || '';
+  const p = password?.toString().trim() || '';
+  for (let i = 1; i < data.length; i++) {
+    const rowUser = (data[i][1] ?? '').toString().trim();
+    const rowPass = (data[i][2] ?? '').toString().trim();
+    if (rowUser === u && rowPass === p) {
+      return {
+        username: data[i][1],
+        password: rowPass,
+        role: data[i][3],
+        tabs: (data[i][4] || '').toString().split(',').filter(Boolean),
+        permissions: (data[i][5] || '').toString().split(',').filter(Boolean)
+      };
+    }
+  }
+  return null;
+}
+
+function getWilayaForPersonnel(sheetName, name) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    return '';
+  }
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    const persNom = data[i][1];  // Correction : Nom (colonne B)
+    const persPrenom = data[i][2];  // Correction : Prénom (colonne C)
+    const testName1 = `${persPrenom} ${persNom}`.trim();
+    const testName2 = `${persNom} ${persPrenom}`.trim();
+    if (testName1 === name || testName2 === name) {
+      return data[i][4];  // Correction : Wilaya (colonne E)
+    }
+  }
+  return '';
+}
+
+// Modified createRemunEntries to use entered taux
+function createRemunEntriesModified(codeOpe, medTaux, infTaux, techTaux, logTaux) {
+  // Similar to original but use passed taux
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let dataSheet = ss.getSheetByName('Data');
+  if (!dataSheet) {
+    dataSheet = ss.insertSheet('Data');
+  }
+  const lastRow = dataSheet.getLastRow();
+  const data = dataSheet.getRange(lastRow, 1, 1, dataSheet.getLastColumn()).getValues()[0];
+  const packName = data[34];
+  const packDetails = getPackDetailsByName(packName);
+  const nbrJourMed = packDetails.nbrJourMedecin;
+  const nbrJourInf = packDetails.nbrJourInfirmier;
+  const nbrJourTech = packDetails.nbrJourTechRadio;
+  const dateOp = data[2];
+  const month = dateOp.getMonth() + 1;
+  const year = dateOp.getFullYear();
+  let remunSheet = ss.getSheetByName('Rémunération');
+  if (!remunSheet) {
+    remunSheet = ss.insertSheet('Rémunération');
+  }
+  if (remunSheet.getLastRow() === 0) {
+    remunSheet.appendRow(['Type', 'FullName', 'CodeOpe', 'DateOp', 'NbrJours', 'TauxJour', 'TotalOp', 'Month', 'Year', 'Paid', 'DatePaid']);
+  }
+  const types = [
+    {type: 'med', names: data[18], nbrJour: nbrJourMed, taux: medTaux || 5000},
+    {type: 'inf', names: data[17], nbrJour: nbrJourInf, taux: infTaux || 4000},
+    {type: 'tech', names: data[20], nbrJour: nbrJourTech, taux: techTaux || 4000}
+  ];
+  types.forEach(t => {
+    if (t.names) {
+      t.names.split(',').forEach(name => {
+        name = name.trim();
+        if (name) {
+          const totalOp = t.nbrJour * t.taux;
+          remunSheet.appendRow([t.type, name, codeOpe, dateOp, t.nbrJour, t.taux, totalOp, month, year, 'no', '']);
+        }
+      });
+    }
+  });
+}
+
+function saveOffreModified(coordination, dateOperation, entrepriseOffre, packSelect, dateEnreg, lieuEntreprise, deplacement, wilayaDepartMedecin, wilayaDepartInfirmier, wilayaDepartTechRadio, distanceMedecin, distanceInfirmier, distanceTechRadio, materiels, distanceMateriel, nbrInfirmier, infirmiers, medecins, nbrMedecin, techRadio, nbrTechRadio, hebergement, dureeMed, dureeInf, dureeTech, dureeLog, frais, chargeSupp, observation, statut, nbrJours, dateFin, medTaux, infTaux, techTaux, personnelGranular, prixVisiteLieux) {
+  // Call saveOffre with personnelGranular (Scénario 3) and prix visite
+  const result = saveOffre(coordination, dateOperation, entrepriseOffre, packSelect, dateEnreg, lieuEntreprise, deplacement, wilayaDepartMedecin, wilayaDepartInfirmier, wilayaDepartTechRadio, distanceMedecin, distanceInfirmier, distanceTechRadio, materiels, distanceMateriel, nbrInfirmier, infirmiers, medecins, nbrMedecin, techRadio, nbrTechRadio, hebergement, dureeMed, dureeInf, dureeTech, dureeLog, frais, chargeSupp, observation, statut, nbrJours, dateFin, personnelGranular, prixVisiteLieux || 30000);
+  const lastRow = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Data').getLastRow();
+  const codeOpe = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Data').getRange(lastRow, 1).getValue();
+  createRemunEntriesModified(codeOpe, medTaux, infTaux, techTaux, 0);
+  return result;
+}
+
+// === NEW FUNCTIONS FOR DASHBOARD AND RENEWAL ===
+
+function getProgPersonnel() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let dataSheet = ss.getSheetByName('Data');
+  if (!dataSheet) return [];
+  
+  const data = dataSheet.getDataRange().getValues();
+  const personnel = [];
+  const timeZone = ss.getSpreadsheetTimeZone();
+  
+  for (let i = 1; i < data.length; i++) {
+    const codeOpe = data[i][0];
+    const entreprise = data[i][4];
+    const site = data[i][6];
+    const dateStart = data[i][2];
+    const dateEnd = data[i][37];
+    const statut = data[i][36];
+    
+    // Médecins
+    const medecins = (data[i][18] || '').split(',').filter(Boolean);
+    medecins.forEach(nom => {
+      personnel.push({
+        nom: nom.trim(),
+        type: 'Médecin',
+        codeOpe,
+        entreprise,
+        site,
+        dateDebut: safeFormatDate(dateStart, timeZone, 'yyyy-MM-dd'),
+        dateFin: safeFormatDate(dateEnd, timeZone, 'yyyy-MM-dd'),
+        statut
+      });
+    });
+    
+    // Infirmiers
+    const infirmiers = (data[i][17] || '').split(',').filter(Boolean);
+    infirmiers.forEach(nom => {
+      personnel.push({
+        nom: nom.trim(),
+        type: 'Infirmier',
+        codeOpe,
+        entreprise,
+        site,
+        dateDebut: safeFormatDate(dateStart, timeZone, 'yyyy-MM-dd'),
+        dateFin: safeFormatDate(dateEnd, timeZone, 'yyyy-MM-dd'),
+        statut
+      });
+    });
+    
+    // Tech Radio
+    const techRadios = (data[i][20] || '').split(',').filter(Boolean);
+    techRadios.forEach(nom => {
+      personnel.push({
+        nom: nom.trim(),
+        type: 'Tech Radio',
+        codeOpe,
+        entreprise,
+        site,
+        dateDebut: safeFormatDate(dateStart, timeZone, 'yyyy-MM-dd'),
+        dateFin: safeFormatDate(dateEnd, timeZone, 'yyyy-MM-dd'),
+        statut
+      });
+    });
+  }
+  
+  return personnel;
+}
+
+// Enhanced updateMission with user tracking
+function updateMissionWithUser(updatedData, userName, userRole) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let dataSheet = ss.getSheetByName('Data');
+  if (!dataSheet) {
+    dataSheet = ss.insertSheet('Data');
+  }
+  const data = dataSheet.getDataRange().getValues();
+  let rowIndex = -1;
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] == updatedData.codeOpe) {
+      rowIndex = i + 1;
+      break;
+    }
+  }
+  if (rowIndex === -1) return 'Mission non trouvée.';
+  if (data[rowIndex - 1][36] === 'Réaliser') return 'Les missions réalisées ne peuvent pas être modifiées.';
+  
+  // Capture original state before modification for detailed audit trail
+  const originalState = {
+    codeOpe: data[rowIndex - 1][0],
+    coordination: data[rowIndex - 1][1],
+    dateOperation: data[rowIndex - 1][2],
+    pack: data[rowIndex - 1][3],
+    entreprise: data[rowIndex - 1][4],
+    nbrEmployes: data[rowIndex - 1][5],
+    lieu: data[rowIndex - 1][6],
+    deplacement: data[rowIndex - 1][7],
+    wilayaDepartMedecin: data[rowIndex - 1][8],
+    wilayaDepartInfirmier: data[rowIndex - 1][9],
+    wilayaDepartTechRadio: data[rowIndex - 1][10],
+    distanceMedecin: data[rowIndex - 1][11],
+    distanceInfirmier: data[rowIndex - 1][12],
+    distanceTechRadio: data[rowIndex - 1][13],
+    materiels: data[rowIndex - 1][14],
+    distanceMateriel: data[rowIndex - 1][15],
+    nbrInfirmier: data[rowIndex - 1][16],
+    infirmiers: data[rowIndex - 1][17],
+    medecins: data[rowIndex - 1][18],
+    nbrMedecin: data[rowIndex - 1][19],
+    techRadio: data[rowIndex - 1][20],
+    nbrTechRadio: data[rowIndex - 1][21],
+    hebergement: data[rowIndex - 1][24],
+    dureeString: data[rowIndex - 1][25],
+    totalCharge: data[rowIndex - 1][28],
+    observation: data[rowIndex - 1][30],
+    frais: data[rowIndex - 1][31],
+    dateFin: data[rowIndex - 1][37]
+  };
+  
+  // Parse durations from original data
+  const durations = originalState.dureeString ? originalState.dureeString.toString().split('|') : [];
+  originalState.dureeMed = durations[0] ? parseFloat(durations[0].split(':')[1]) : 0;
+  originalState.dureeInf = durations[1] ? parseFloat(durations[1].split(':')[1]) : 0;
+  originalState.dureeTech = durations[2] ? parseFloat(durations[2].split(':')[1]) : 0;
+  originalState.dureeLog = durations[3] ? parseFloat(durations[3].split(':')[1]) : 0;
+  
+  // Recalculate bareme, totalCharge, totalNet
+  let baremeSheet = ss.getSheetByName('Barème');
+  if (!baremeSheet) {
+    baremeSheet = ss.insertSheet('Barème');
+  }
+  const baremeData = baremeSheet.getDataRange().getValues();
+  let bareme = '';
+  let rate = baremeSheet.getRange('A2').getValue();
+  let totalDistance = parseFloat(updatedData.distanceMedecin) + parseFloat(updatedData.distanceInfirmier) + parseFloat(updatedData.distanceTechRadio) + parseFloat(updatedData.distanceMateriel);
+  let hebergCost = (updatedData.dureeMed * updatedData.nbrMedecin + updatedData.dureeInf * updatedData.nbrInfirmier + updatedData.dureeTech * updatedData.nbrTechRadio + updatedData.dureeLog * (updatedData.nbrLogistique || 1)) * updatedData.frais;
+  let totalCharge = totalDistance * rate + hebergCost + updatedData.chargeSupp;
+  for (let j = 1; j < baremeData.length; j++) {
+    if (totalDistance <= baremeData[j][1]) {
+      bareme = baremeData[j][0];
+      break;
+    }
+  }
+  if (!bareme && baremeData.length > 1) {
+    bareme = baremeData[baremeData.length - 1][0];
+  }
+  const packDetails = getPackDetailsByName(updatedData.pack);
+  const total = packDetails.totalPrix - totalCharge;
+  const opDate = new Date(updatedData.dateOperation);
+  const finDate = new Date(updatedData.dateFin);
+  let statutMission = 'Programmer';
+  const currentDate = new Date();
+  if (currentDate >= opDate && currentDate < finDate) statutMission = 'en cours';
+  if (currentDate >= finDate) statutMission = 'Réaliser';
+  const dureeString = `med:${updatedData.dureeMed}|inf:${updatedData.dureeInf}|tech:${updatedData.dureeTech}|log:${updatedData.dureeLog}`;
+  
+  // Update the row
+  dataSheet.getRange(rowIndex, 2).setValue(updatedData.coordination);
+  dataSheet.getRange(rowIndex, 3).setValue(new Date(updatedData.dateOperation));
+  dataSheet.getRange(rowIndex, 7).setValue(updatedData.lieu);
+  dataSheet.getRange(rowIndex, 8).setValue(updatedData.deplacement);
+  dataSheet.getRange(rowIndex, 6).setValue(updatedData.nbrEmployes);
+  dataSheet.getRange(rowIndex, 9).setValue(updatedData.wilayaDepartMedecin);
+  dataSheet.getRange(rowIndex, 10).setValue(updatedData.wilayaDepartInfirmier);
+  dataSheet.getRange(rowIndex, 11).setValue(updatedData.wilayaDepartTechRadio);
+  dataSheet.getRange(rowIndex, 12).setValue(updatedData.distanceMedecin);
+  dataSheet.getRange(rowIndex, 13).setValue(updatedData.distanceInfirmier);
+  dataSheet.getRange(rowIndex, 14).setValue(updatedData.distanceTechRadio);
+  dataSheet.getRange(rowIndex, 15).setValue(updatedData.materiels);
+  dataSheet.getRange(rowIndex, 16).setValue(updatedData.distanceMateriel);
+  dataSheet.getRange(rowIndex, 17).setValue(updatedData.nbrInfirmier);
+  dataSheet.getRange(rowIndex, 18).setValue(updatedData.infirmiers);
+  dataSheet.getRange(rowIndex, 19).setValue(updatedData.medecins);
+  dataSheet.getRange(rowIndex, 20).setValue(updatedData.nbrMedecin);
+  dataSheet.getRange(rowIndex, 21).setValue(updatedData.techRadio);
+  dataSheet.getRange(rowIndex, 22).setValue(updatedData.nbrTechRadio);
+  dataSheet.getRange(rowIndex, 25).setValue(updatedData.hebergement);
+  dataSheet.getRange(rowIndex, 26).setValue(dureeString);
+  dataSheet.getRange(rowIndex, 27).setValue(bareme);
+  dataSheet.getRange(rowIndex, 28).setValue(updatedData.chargeSupp);
+  dataSheet.getRange(rowIndex, 29).setValue(totalCharge);
+  dataSheet.getRange(rowIndex, 31).setValue(updatedData.observation);
+  dataSheet.getRange(rowIndex, 32).setValue(updatedData.frais);
+  dataSheet.getRange(rowIndex, 33).setValue(total);
+  dataSheet.getRange(rowIndex, 36).setValue(updatedData.dureeMission);
+  dataSheet.getRange(rowIndex, 37).setValue(statutMission);
+  dataSheet.getRange(rowIndex, 38).setValue(new Date(updatedData.dateFin));
+  
+  // Build detailed change log
+  const changes = [];
+  if (originalState.coordination !== updatedData.coordination) 
+    changes.push(`Coordination: "${originalState.coordination}" → "${updatedData.coordination}"`);
+  if (new Date(originalState.dateOperation).getTime() !== new Date(updatedData.dateOperation).getTime()) 
+    changes.push(`Date opération modifiée`);
+  if (originalState.nbrEmployes !== updatedData.nbrEmployes) 
+    changes.push(`Nbr employés: ${originalState.nbrEmployes} → ${updatedData.nbrEmployes}`);
+  if (originalState.lieu !== updatedData.lieu) 
+    changes.push(`Lieu: "${originalState.lieu}" → "${updatedData.lieu}"`);
+  if (originalState.deplacement !== updatedData.deplacement)
+    changes.push(`Déplacement: "${originalState.deplacement}" → "${updatedData.deplacement}"`);
+  if (originalState.nbrMedecin !== updatedData.nbrMedecin) 
+    changes.push(`Nbr médecins: ${originalState.nbrMedecin} → ${updatedData.nbrMedecin}`);
+  if (originalState.nbrInfirmier !== updatedData.nbrInfirmier) 
+    changes.push(`Nbr infirmiers: ${originalState.nbrInfirmier} → ${updatedData.nbrInfirmier}`);
+  if (originalState.nbrTechRadio !== updatedData.nbrTechRadio) 
+    changes.push(`Nbr tech radio: ${originalState.nbrTechRadio} → ${updatedData.nbrTechRadio}`);
+  if (originalState.medecins !== updatedData.medecins) 
+    changes.push(`Liste médecins modifiée`);
+  if (originalState.infirmiers !== updatedData.infirmiers) 
+    changes.push(`Liste infirmiers modifiée`);
+  if (originalState.techRadio !== updatedData.techRadio) 
+    changes.push(`Liste tech radio modifiée`);
+  if (originalState.materiels !== updatedData.materiels)
+    changes.push(`Matériels modifiés`);
+  if (originalState.dureeMed !== updatedData.dureeMed) 
+    changes.push(`Durée médecins: ${originalState.dureeMed} → ${updatedData.dureeMed} jour(s)`);
+  if (originalState.dureeInf !== updatedData.dureeInf) 
+    changes.push(`Durée infirmiers: ${originalState.dureeInf} → ${updatedData.dureeInf} jour(s)`);
+  if (originalState.dureeTech !== updatedData.dureeTech) 
+    changes.push(`Durée tech radio: ${originalState.dureeTech} → ${updatedData.dureeTech} jour(s)`);
+  if (originalState.hebergement !== updatedData.hebergement)
+    changes.push(`Hébergement: ${originalState.hebergement} → ${updatedData.hebergement}`);
+  if (originalState.frais !== updatedData.frais)
+    changes.push(`Frais/nuit: ${originalState.frais} → ${updatedData.frais} DZD`);
+  if (new Date(originalState.dateFin).getTime() !== new Date(updatedData.dateFin).getTime()) 
+    changes.push(`Date fin modifiée`);
+  
+  const chargeChanged = Math.abs(parseFloat(originalState.totalCharge) - totalCharge) > 0.01;
+  if (chargeChanged) 
+    changes.push(`Charge totale: ${parseFloat(originalState.totalCharge).toFixed(2)} → ${totalCharge.toFixed(2)} DZD`);
+  
+  // Log to audit trail with user information
+  if (changes.length > 0) {
+    const logEntry = {
+      timestamp: new Date(),
+      user: userName || 'Utilisateur',
+      role: userRole || 'Coordination',
+      action: 'Modification Opération',
+      details: `Op. ${updatedData.codeOpe} (${originalState.entreprise}): ${changes.join(' | ')}`
+    };
+    logOperationModification(logEntry);
+  }
+  
+  return 'Mission mise à jour avec succès. ' + changes.length + ' modification(s) enregistrée(s).';
+}
+
+function getProgMateriel() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let dataSheet = ss.getSheetByName('Data');
+  if (!dataSheet) return [];
+  
+  const data = dataSheet.getDataRange().getValues();
+  const materiel = [];
+  const timeZone = ss.getSpreadsheetTimeZone();
+  
+  for (let i = 1; i < data.length; i++) {
+    const codeOpe = data[i][0];
+    const entreprise = data[i][4];
+    const site = data[i][6];
+    const dateStart = data[i][2];
+    const dateEnd = data[i][37];
+    const statut = data[i][36];
+    const materiels = (data[i][14] || '').split(',').filter(Boolean);
+    
+    materiels.forEach(nom => {
+      materiel.push({
+        nom: nom.trim(),
+        codeOpe,
+        entreprise,
+        site,
+        dateDebut: safeFormatDate(dateStart, timeZone, 'yyyy-MM-dd'),
+        dateFin: safeFormatDate(dateEnd, timeZone, 'yyyy-MM-dd'),
+        statut
+      });
+    });
+  }
+  
+  return materiel;
+}
+
+function getPacksByEntreprise(entreprise) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let packSheet = ss.getSheetByName('Pack');
+  if (!packSheet) return [];
+  
+  const data = packSheet.getDataRange().getValues();
+  const packs = [];
+  
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][2] === entreprise && !packs.some(p => p.codePack === data[i][0])) {
+      packs.push({
+        codePack: data[i][0],
+        packName: data[i][1],
+        entreprise: data[i][2]
+      });
+    }
+  }
+  
+  return packs;
+}
+
+function renewPack(codePack, newDateDebut, newDateFin) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // Get original pack details
+  const packDetails = getPackDetails(codePack);
+  if (!packDetails) {
+    return 'Erreur: Pack non trouvé.';
+  }
+  
+  // Create a new pack with same data but new dates and mark as "à calculer"
+  let packSheet = ss.getSheetByName('Pack');
+  if (!packSheet) return 'Erreur: Sheet Pack non trouvée.';
+  
+  const data = packSheet.getDataRange().getValues();
+  const lastRow = packSheet.getLastRow();
+  const newCodePack = lastRow > 1 ? Number(packSheet.getRange(lastRow, 1).getValue()) + 1 : 1;
+  const dateEnreg = new Date();
+  
+  // Copy all rows for this pack with new code and dates
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] == codePack) {
+      const newRow = [...data[i]];
+      newRow[0] = newCodePack; // New code
+      newRow[10] = 'à calculer'; // Reset status
+      newRow[36] = dateEnreg; // New date
+      // Note: dates are stored in Data sheet, not Pack sheet
+      packSheet.appendRow(newRow);
+    }
+  }
+  
+  // Enregistrer le renouvellement dans la feuille "Renouvellement"
+  let renouvSheet = ss.getSheetByName('Renouvellement');
+  if (!renouvSheet) {
+    renouvSheet = ss.insertSheet('Renouvellement');
+    // Ajouter les en-têtes si la feuille vient d'être créée
+    const renouvHeaders = [
+      'Code Renouvellement', 'Code Pack Original', 'Nom Pack', 'Entreprise',
+      'Date Création Original', 'Date Renouvellement', 'Nouvelle Date Début', 'Nouvelle Date Fin',
+      'Modification Effectuée', 'Commentaire', 'Statut', 'Date Enregistrement'
+    ];
+    renouvSheet.getRange(1, 1, 1, renouvHeaders.length).setValues([renouvHeaders]);
+    renouvSheet.getRange(1, 1, 1, renouvHeaders.length)
+      .setBackground('#1e3d7d')
+      .setFontColor('white')
+      .setFontWeight('bold')
+      .setHorizontalAlignment('center');
+    renouvSheet.setFrozenRows(1);
+  }
+  
+  // Obtenir le dernier code de renouvellement
+  const lastRenouvRow = renouvSheet.getLastRow();
+  const codeRenouvellement = lastRenouvRow > 1 ? Number(renouvSheet.getRange(lastRenouvRow, 1).getValue()) + 1 : 1;
+  
+  // Trouver la date de création originale
+  const dateCreationOriginal = packDetails.dateEnreg || '';
+  
+  // Enregistrer le renouvellement
+  renouvSheet.appendRow([
+    codeRenouvellement,           // Code Renouvellement
+    codePack,                     // Code Pack Original
+    packDetails.packName || '',   // Nom Pack
+    packDetails.entreprise || '', // Entreprise
+    dateCreationOriginal,         // Date Création Original
+    dateEnreg,                    // Date Renouvellement
+    new Date(newDateDebut),       // Nouvelle Date Début
+    new Date(newDateFin),         // Nouvelle Date Fin
+    'Non',                        // Modification Effectuée
+    'Renouvellement automatique', // Commentaire
+    'à calculer',                 // Statut
+    dateEnreg                     // Date Enregistrement
+  ]);
+  
+  return `Pack renouvelé avec succès. Nouveau code: ${newCodePack}. L'offre est maintenant "à calculer". Code de renouvellement: ${codeRenouvellement}`;
+}
+
+// Check for personnel conflicts (double-booking)
+function checkPersonnelConflicts(personnelName, personnelType, dateDebut, dateFin, excludeCodeOpe) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let dataSheet = ss.getSheetByName('Data');
+  if (!dataSheet) return { hasConflict: false, conflicts: [] };
+  
+  const data = dataSheet.getDataRange().getValues();
+  const conflicts = [];
+  const startDate = new Date(dateDebut);
+  const endDate = new Date(dateFin);
+  
+  for (let i = 1; i < data.length; i++) {
+    const codeOpe = data[i][0];
+    
+    // Skip the operation we're excluding (for updates)
+    if (excludeCodeOpe && codeOpe === excludeCodeOpe) continue;
+    
+    const opeStartDate = new Date(data[i][2]);
+    const opeEndDate = new Date(data[i][37]);
+    
+    // Check if dates overlap
+    if (startDate <= opeEndDate && endDate >= opeStartDate) {
+      let personnelList = [];
+      
+      // Get personnel list based on type
+      if (personnelType === 'medecin') {
+        personnelList = (data[i][18] || '').toString().split(',').map(n => n.trim()).filter(Boolean);
+      } else if (personnelType === 'infirmier') {
+        personnelList = (data[i][17] || '').toString().split(',').map(n => n.trim()).filter(Boolean);
+      } else if (personnelType === 'tech-radio') {
+        personnelList = (data[i][20] || '').toString().split(',').map(n => n.trim()).filter(Boolean);
+      }
+      
+      // Check if this person is in the list
+      if (personnelList.some(p => p.toLowerCase() === personnelName.toLowerCase())) {
+        conflicts.push({
+          codeOpe: codeOpe,
+          entreprise: data[i][4],
+          dateDebut: opeStartDate,
+          dateFin: opeEndDate
+        });
+      }
+    }
+  }
+  
+  return {
+    hasConflict: conflicts.length > 0,
+    conflicts: conflicts
+  };
+}
+
+// === AUDIT TRAIL (JOURNALISATION) ===
+// AVERTISSEMENT: Ce système de journalisation n'offre aucune garantie d'intégrité
+// Les entrées peuvent être modifiées ou supprimées directement dans Google Sheets
+function logAuditTrail(logEntry) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let auditSheet = ss.getSheetByName('Audit');
+  
+  // Créer la feuille Audit si elle n'existe pas
+  if (!auditSheet) {
+    auditSheet = ss.insertSheet('Audit');
+    auditSheet.appendRow(['Horodatage', 'Utilisateur', 'Rôle', 'Action', 'Détails']);
+    auditSheet.getRange('A1:E1').setBackground('#1e3d7d').setFontColor('white').setFontWeight('bold');
+  }
+  
+  // Ajouter l'entrée d'audit
+  auditSheet.appendRow([
+    logEntry.timestamp,
+    logEntry.user,
+    logEntry.role,
+    logEntry.action,
+    logEntry.details
+  ]);
+  
+  return 'Audit log enregistré';
+}
+
+// Fonction pour récupérer l'historique d'audit
+function getAuditLogs(limit = 100) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const auditSheet = ss.getSheetByName('Audit');
+  
+  if (!auditSheet) {
+    return [];
+  }
+  
+  const data = auditSheet.getDataRange().getValues();
+  const logs = [];
+  
+  // Commencer à l'index 1 pour sauter l'en-tête
+  const startIndex = Math.max(1, data.length - limit);
+  
+  for (let i = startIndex; i < data.length; i++) {
+    logs.push({
+      timestamp: data[i][0],
+      user: data[i][1],
+      role: data[i][2],
+      action: data[i][3],
+      details: data[i][4]
+    });
+  }
+  
+  return logs.reverse(); // Plus récents en premier
+}
+
+// === FINANCE VALIDATION FUNCTIONS ===
+function validateOfferFinance(codePack, comment, userName, userRole) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let packSheet = ss.getSheetByName('Pack');
+  if (!packSheet) {
+    packSheet = ss.insertSheet('Pack');
+  }
+  const data = packSheet.getDataRange().getValues();
+  let found = false;
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === codePack) {
+      packSheet.getRange(i + 1, 11).setValue('validé');
+      // Log audit with actual user
+      logAuditTrail({
+        timestamp: new Date(),
+        user: userName || 'Finance',
+        role: userRole || 'Finance',
+        action: 'Validation Offre',
+        details: `Offre ${codePack} validée. Commentaire: ${comment || 'Aucun'}`
+      });
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    return 'Erreur: Offre non trouvée';
+  }
+  return 'Offre validée';
+}
+
+function rejectOfferFinance(codePack, comment, userName, userRole) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let packSheet = ss.getSheetByName('Pack');
+  if (!packSheet) {
+    packSheet = ss.insertSheet('Pack');
+  }
+  const data = packSheet.getDataRange().getValues();
+  let found = false;
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === codePack) {
+      packSheet.getRange(i + 1, 11).setValue('non validé');
+      // Log audit with actual user
+      logAuditTrail({
+        timestamp: new Date(),
+        user: userName || 'Finance',
+        role: userRole || 'Finance',
+        action: 'Rejet Offre',
+        details: `Offre ${codePack} rejetée. Raison: ${comment}`
+      });
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    return 'Erreur: Offre non trouvée';
+  }
+  return 'Offre rejetée';
+}
+
+
+// ... (le reste du code server-side reste inchangé, y compris toutes les autres fonctions)
