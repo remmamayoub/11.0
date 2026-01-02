@@ -885,8 +885,8 @@ function getPackDetails(codePack) {
   const lieuEntreprise = Array.from(lieux).join('; ');
   // Fallback when stored totals are missing
   if (!totalRevenuePack) totalRevenuePack = totalPrix;
-  const costBase = totalCostPack || 0;
-  if (!totalNetPack) totalNetPack = totalRevenuePack - costBase;
+  if (!totalCostPack) totalCostPack = totalParamPack || totalPrix;
+  totalNetPack = totalRevenuePack - totalCostPack;
   
   Logger.log(`getPackDetails for code ${codePack}: found ${acts.length} acts`);
   return {codePack, packName, entreprise, totalEmployes, totalPrix, totalRevenuePack, totalCostPack, totalNetPack, lieuEntreprise, acts, calculeJourMedecin, nbrJourMedecin, calculeJourInfirmier, nbrJourInfirmier, calculeJourTechRadio, nbrJourTechRadio, nbrMed, nbrInf, nbrTech, totalParamPack, totalYalidinePack, totalRemunPack, totalTransportPack};

@@ -6233,9 +6233,19 @@
           return;
         }
         const data = JSON.parse(stored);
-        const packValue = document.getElementById('packInput').value.trim();
+        const packInputEl = document.getElementById('packInput');
+        const packValue = packInputEl.value.trim();
         const parts = packValue.split(' - ');
-        const packSelect = parts[0] ? parseInt(parts[0].trim()) : NaN;
+        let packSelect = parts[0] ? parseInt(parts[0].trim()) : NaN;
+        if (isNaN(packSelect) && packValue) {
+          const options = Array.from(document.getElementById('packList').options || []);
+          const opt = options.find(o => o.value.toLowerCase() === packValue.toLowerCase() || o.value.toLowerCase().endsWith(`- ${packValue.toLowerCase()}`));
+          if (opt) {
+            const p = opt.value.split(' - ');
+            packSelect = p[0] ? parseInt(p[0].trim()) : NaN;
+            packInputEl.value = opt.value;
+          }
+        }
         const entrepriseOffre = document.getElementById('entrepriseOffre').value.trim();
         if (data.packSelect !== packSelect || data.entreprise !== entrepriseOffre) {
           showAlert('Le pack ou l\'entreprise ne correspond pas au calcul sauvegardé.', 'error', 'offreError');
