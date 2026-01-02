@@ -5806,11 +5806,12 @@
       calcGlobalCalcule();
     }
     
+    const AUTO_SAVE_DELAY_MS = 800;
     let autoSaveTimer = null;
     let autoSaveErrorShown = false;
     function scheduleAutoSaveCalcule() {
       if (autoSaveTimer) clearTimeout(autoSaveTimer);
-      autoSaveTimer = setTimeout(() => saveCalculeToStorage(true), 800);
+      autoSaveTimer = setTimeout(() => saveCalculeToStorage(true), AUTO_SAVE_DELAY_MS);
     }
     function calcGlobalCalcule() {
       let totalRevenue = 0;

@@ -1387,10 +1387,10 @@ function saveCalculToDataCalculeSimple(
     const dateEnregistrement = Utilities.formatDate(today, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
     
     // Déterminer validation finance
-  const validationFinance = totalRevenue > 0 && ((totalNet / totalRevenue) * 100) >= 70 ? 'Oui' : 'En attente';
-  const dateValidation = validationFinance === 'Oui' ? Utilities.formatDate(today, Session.getScriptTimeZone(), 'yyyy-MM-dd') : '';
-  const commentaires = validationFinance === 'Oui' ? `Auto-validé (marge ${margePct})` : `En attente validation Finance (marge ${margePct})`;
-  const finalCommentaires = (commentaires || '') + (detailsJson ? ` | Détails: ${detailsJson}` : '');
+    const validationFinance = totalRevenue > 0 && ((totalNet / totalRevenue) * 100) >= 70 ? 'Oui' : 'En attente';
+    const dateValidation = validationFinance === 'Oui' ? Utilities.formatDate(today, Session.getScriptTimeZone(), 'yyyy-MM-dd') : '';
+    const commentaires = validationFinance === 'Oui' ? `Auto-validé (marge ${margePct})` : `En attente validation Finance (marge ${margePct})`;
+    const finalCommentaires = (commentaires || '') + (detailsJson ? ` | Détails: ${detailsJson}` : '');
     
     const dataRow = [
       codeOpe,                           // Code Operation
@@ -1439,11 +1439,11 @@ function saveCalculToDataCalculeSimple(
       margeNet,                          // Marge Net
       dateEnregistrement,                // Date Enregistrement
       utilisateur,                       // Utilisateur
-  validationFinance,                 // Validation Finance
-  dateValidation,                    // Date Validation
-  finalCommentaires,                 // Commentaires
-  margePct                           // Marge %
-];
+      validationFinance,                 // Validation Finance
+      dateValidation,                    // Date Validation
+      finalCommentaires,                 // Commentaires
+      margePct                           // Marge %
+    ];
     
     Logger.log('Data row prepared successfully');
     
