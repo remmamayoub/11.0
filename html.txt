@@ -1416,9 +1416,11 @@
                 </tbody>
               </table>
             </div>
-            <button class="btn-primary" style="margin-top:12px;" onclick="renderReconciliationView();"><span class="material-icons">refresh</span> Actualiser le résumé</button>
+          <button class="btn-primary" style="margin-top:12px;" onclick="renderReconciliationView();"><span class="material-icons">refresh</span> Actualiser le résumé</button>
           </div>
-          <button class="btn-success" data-permission="ajouter" onclick="console.log('Button clicked!'); saveCalculeToStorage();"><span class="material-icons">save</span> Sauvegarder Calcul et Passer à Offre</button>
+          <div class="alert alert-success" id="autoSaveNotice" style="margin-top:12px; display:none;">
+            <span class="material-icons">save</span> Sauvegarde automatique activée
+          </div>
           <div id="calculeError" class="error"></div>
         </div>
       </div>
@@ -5325,6 +5327,9 @@
           });
           showSiteTabCalcule(1);
           calcGlobalCalcule();
+          const autoNotice = document.getElementById('autoSaveNotice');
+          if (autoNotice) autoNotice.style.display = 'block';
+          scheduleAutoSaveCalcule();
         }).withFailureHandler(onFailure).getPackDetails(codePack);
       } else {
         document.getElementById('packTotalPrixCalcule').textContent = '0.00';
@@ -5801,6 +5806,12 @@
       calcGlobalCalcule();
     }
     
+    let autoSaveTimer = null;
+    let autoSaveErrorShown = false;
+    function scheduleAutoSaveCalcule() {
+      if (autoSaveTimer) clearTimeout(autoSaveTimer);
+      autoSaveTimer = setTimeout(() => saveCalculeToStorage(true), 800);
+    }
     function calcGlobalCalcule() {
       let totalRevenue = 0;
       let totalCost = 0;
@@ -5819,8 +5830,11 @@
       const marge = totalRevenue > 0 ? ((totalNet / totalRevenue) * 100).toFixed(2) + '%' : '0%';
       document.getElementById('margeNetCalcule').textContent = marge;
       if (typeof renderReconciliationView === 'function') renderReconciliationView();
+      if (siteCountCalcule > 0 && document.getElementById('packInputCalcule')?.value.trim()) {
+        scheduleAutoSaveCalcule();
+      }
     }
-    function saveCalculeToStorage() {
+    function saveCalculeToStorage(autoSave = false) {
       console.log('saveCalculeToStorage called');
       
       // Check permission first (treat undefined as true - permission granted by default)
@@ -5839,9 +5853,18 @@
       const packSelect = parts[0] ? parseInt(parts[0].trim()) : NaN;
       console.log('packSelect:', packSelect);
       if (isNaN(packSelect)) {
-        showAlert('Sélectionnez un pack valide.', 'error', 'calculeError');
+        const msg = 'Onglet Pack non chargé : rouvrez l’onglet Pack puis réessayez.';
+        if (autoSave) {
+          if (!autoSaveErrorShown) {
+            showAlert(msg, 'error', 'calculeError');
+            autoSaveErrorShown = true;
+          }
+        } else {
+          showAlert(msg, 'error', 'calculeError');
+        }
         return;
       }
+      autoSaveErrorShown = false;
       const siteCountCalcule = document.querySelectorAll('#siteTabsCalcule .sub-tab-btn').length;
       let distanceMedecin = 0;
       let distanceInfirmier = 0;
@@ -5944,6 +5967,43 @@
       localStorage.setItem('calculeData', JSON.stringify(data));
       console.log('Data saved to localStorage:', data);
       
+      // Construire un récapitulatif détaillé pour la feuille Data Calcule
+      const packName = parts.slice(1).join(' - ').trim();
+      const totalEmployes = parseInt(document.getElementById('nbrEmployeCalcule').value) || 0;
+      const totalParametres = Array.from(document.querySelectorAll('[id^="recap-param-site-"]')).reduce((sum, el) => sum + (parseFloat(el.textContent) || 0), 0);
+      const totalRemuneration = medTaux + infTaux + techTaux;
+      const totalChargeLogistique = Array.from(document.querySelectorAll('[id^="total-charge-logistique-calcule"]')).reduce((sum, el) => sum + (parseFloat(el.textContent) || 0), 0);
+      const totalYalidine = Array.from(document.querySelectorAll('[id^="total-yalidine-calcule"]')).reduce((sum, el) => sum + (parseFloat(el.textContent) || 0), 0);
+      const prixVisiteLieux = parseFloat(document.getElementById('prixVisiteLieux')?.value) || 0;
+      const totalCharges = totalParametres + totalRemuneration + totalChargeLogistique + totalYalidine + chargeSupp + (frais || 0) + prixVisiteLieux;
+      const parametres = Array.from(document.querySelectorAll('#siteContentsCalcule p')).filter(p => p.textContent.trim().startsWith('Acte')).map(p => p.textContent.replace(/^Acte:\s*/i, '').split(',')[0].trim());
+      let detailsJson = '';
+      try {
+        detailsJson = JSON.stringify({
+          entreprise: data.entreprise,
+          packName,
+          packCode: data.packSelect,
+          totalEmployes,
+          parametres,
+          totalRevenue,
+          totalParametres,
+          totalRemuneration,
+          totalChargeLogistique,
+          totalYalidine,
+          prixVisiteLieux,
+          chargeSupp,
+          frais,
+          totalCharges,
+          totalNet,
+          marge: totalRevenue > 0 ? ((totalNet / totalRevenue) * 100) : 0,
+          medecins,
+          infirmiers,
+          techRadio
+        });
+      } catch (e) {
+        console.warn('Impossible de sérialiser les détails, utilisation d\'une chaîne vide', e);
+      }
+      
       // Calculate margin percentage
       const marge = totalRevenue > 0 ? ((totalNet / totalRevenue) * 100) : 0;
       console.log('Margin calculated:', marge.toFixed(2) + '%');
@@ -5952,157 +6012,83 @@
       const validationThreshold = parseFloat(localStorage.getItem('marginValidationThreshold') || '70');
       console.log('Validation threshold:', validationThreshold + '%');
       
-      if (marge < validationThreshold) {
-        // Margin is below threshold - requires Finance validation
-        console.log('Margin below threshold, requesting Finance validation');
+      const requiresFinance = marge < validationThreshold;
+      if (requiresFinance && !autoSave) {
         const confirmFinance = confirm(`Attention: La marge est de ${marge.toFixed(2)}%, inférieure au seuil de ${validationThreshold}%.\n\nCette offre nécessite une validation du service Finance avant de continuer.\n\nVoulez-vous marquer cette offre comme "en attente de validation Finance" ?`);
-        
-        if (confirmFinance) {
-          console.log('Finance validation accepted');
-          // Sauvegarder avec statut "attente validation finance"
-          data.statut = 'attente validation finance';
-          
-          // Log data size and structure for debugging
-          console.log('Data object keys:', Object.keys(data));
-          console.log('Data packSelect:', data.packSelect);
-          console.log('Data stringified length:', JSON.stringify(data).length);
-          console.log('Full data object:', data);
-          
-          // Try to serialize data to check if it's valid
-          try {
-            const serialized = JSON.stringify(data);
-            console.log('Data serialization successful, length:', serialized.length);
-          } catch (e) {
-            console.error('Data serialization failed:', e);
-            showAlert('Erreur: Les données ne peuvent pas être sérialisées. ' + e.message, 'error', 'calculeError');
-            return;
-          }
-          
-          console.log('Calling google.script.run.saveCalculToDataCalculeSimple');
-          console.log('Parameters: packSelect=' + data.packSelect + ', entreprise=' + data.entreprise);
-          
-          // SIMPLIFIED APPROACH: Send parameters individually instead of complex object
-          google.script.run
-            .withSuccessHandler((result) => {
-              console.log('saveCalculToDataCalculeSimple result:', result);
-              if (result && result.success) {
-                console.log('Save successful');
-                showAlert(result.message + `\n\nMarge: ${marge.toFixed(2)}% < ${validationThreshold}%\nEn attente de validation Finance`, 'success');
-                showTab('offreTab');
-              } else {
-                console.error('Save failed:', result);
-                showAlert('Erreur: ' + (result ? result.message : 'Erreur inconnue'), 'error', 'calculeError');
-              }
-            })
-            .withFailureHandler((error) => {
-              console.error('saveCalculToDataCalculeSimple failed:', error);
-              console.error('Error type:', typeof error);
-              console.error('Error details:', error);
-              showAlert('Erreur lors de la sauvegarde: ' + (error ? error.message || error : 'Erreur inconnue'), 'error', 'calculeError');
-            })
-            .saveCalculToDataCalculeSimple(
-              data.packSelect,
-              data.entreprise,
-              data.distanceMedecin,
-              data.distanceInfirmier,
-              data.distanceTechRadio,
-              data.nbrMedecin,
-              data.nbrInfirmier,
-              data.nbrTechRadio,
-              data.medecins,
-              data.infirmiers,
-              data.techRadio,
-              data.medTaux,
-              data.infTaux,
-              data.techTaux,
-              data.hebergement,
-              data.dureeMed,
-              data.dureeInf,
-              data.dureeTech,
-              data.frais,
-              data.chargeSupp,
-              data.nbrJours,
-              data.dateFin,
-              data.totalRevenue,
-              data.totalCost,
-              data.totalNet,
-              'attente validation finance'
-            );
-        } else {
+        if (!confirmFinance) {
           console.log('Finance validation cancelled by user');
           showAlert('Sauvegarde annulée. La validation Finance est obligatoire pour cette marge.', 'error', 'calculeError');
-        }
-      } else {
-        // Margin is above threshold - auto-validate
-        console.log('Margin above threshold, auto-validating with status: calculer');
-        
-        // Log data size and structure for debugging
-        console.log('Data object keys:', Object.keys(data));
-        console.log('Data packSelect:', data.packSelect);
-        console.log('Data stringified length:', JSON.stringify(data).length);
-        console.log('Full data object:', data);
-        
-        // Try to serialize data to check if it's valid
-        try {
-          const serialized = JSON.stringify(data);
-          console.log('Data serialization successful, length:', serialized.length);
-        } catch (e) {
-          console.error('Data serialization failed:', e);
-          showAlert('Erreur: Les données ne peuvent pas être sérialisées. ' + e.message, 'error', 'calculeError');
           return;
         }
-        
-        console.log('Calling google.script.run.saveCalculToDataCalculeSimple');
-        console.log('Parameters: packSelect=' + data.packSelect + ', entreprise=' + data.entreprise);
-        
-        // SIMPLIFIED APPROACH: Send parameters individually instead of complex object
-        google.script.run
-          .withSuccessHandler((result) => {
-            console.log('saveCalculToDataCalculeSimple result:', result);
-            if (result && result.success) {
-              console.log('Save successful');
-              showAlert(result.message + `\n\nMarge: ${marge.toFixed(2)}% ≥ ${validationThreshold}%`, 'success');
-              showTab('offreTab');
-            } else {
-              console.error('Save failed:', result);
-              showAlert('Erreur: ' + (result ? result.message : 'Erreur inconnue'), 'error', 'calculeError');
-            }
-          })
-          .withFailureHandler((error) => {
-            console.error('saveCalculToDataCalculeSimple failed:', error);
-            console.error('Error type:', typeof error);
-            console.error('Error details:', error);
-            showAlert('Erreur lors de la sauvegarde: ' + (error ? error.message || error : 'Erreur inconnue'), 'error', 'calculeError');
-          })
-          .saveCalculToDataCalculeSimple(
-            data.packSelect,
-            data.entreprise,
-            data.distanceMedecin,
-            data.distanceInfirmier,
-            data.distanceTechRadio,
-            data.nbrMedecin,
-            data.nbrInfirmier,
-            data.nbrTechRadio,
-            data.medecins,
-            data.infirmiers,
-            data.techRadio,
-            data.medTaux,
-            data.infTaux,
-            data.techTaux,
-            data.hebergement,
-            data.dureeMed,
-            data.dureeInf,
-            data.dureeTech,
-            data.frais,
-            data.chargeSupp,
-            data.nbrJours,
-            data.dateFin,
-            data.totalRevenue,
-            data.totalCost,
-            data.totalNet,
-            'calculer'
-          );
       }
+      
+      data.statut = requiresFinance ? 'attente validation finance' : 'calculer';
+      
+      // Try to serialize data to check if it's valid
+      try {
+        const serialized = JSON.stringify(data);
+        console.log('Data serialization successful, length:', serialized.length);
+      } catch (e) {
+        console.error('Data serialization failed:', e);
+        showAlert('Erreur: Les données ne peuvent pas être sérialisées. ' + e.message, 'error', 'calculeError');
+        return;
+      }
+      
+      const statusLabel = requiresFinance ? 'en attente de validation Finance' : 'calculer';
+      const successMessage = autoSave
+        ? `Sauvegarde automatique (${statusLabel}) effectuée. Marge: ${marge.toFixed(2)}%`
+        : `Sauvegarde effectuée (${statusLabel}). Marge: ${marge.toFixed(2)}%`;
+      
+      console.log('Calling google.script.run.saveCalculToDataCalculeSimple');
+      console.log('Parameters: packSelect=' + data.packSelect + ', entreprise=' + data.entreprise);
+      
+      google.script.run
+        .withSuccessHandler((result) => {
+          console.log('saveCalculToDataCalculeSimple result:', result);
+          if (result && result.success) {
+            autoSaveErrorShown = false;
+            if (!autoSave) showTab('offreTab');
+            showAlert(successMessage, 'success', 'calculeError');
+          } else {
+            console.error('Save failed:', result);
+            showAlert('Erreur: ' + (result ? result.message : 'Erreur inconnue'), 'error', 'calculeError');
+          }
+        })
+        .withFailureHandler((error) => {
+          console.error('saveCalculToDataCalculeSimple failed:', error);
+          console.error('Error type:', typeof error);
+          console.error('Error details:', error);
+          showAlert('Erreur lors de la sauvegarde: ' + (error ? error.message || error : 'Erreur inconnue'), 'error', 'calculeError');
+        })
+        .saveCalculToDataCalculeSimple(
+          data.packSelect,
+          data.entreprise,
+          data.distanceMedecin,
+          data.distanceInfirmier,
+          data.distanceTechRadio,
+          data.nbrMedecin,
+          data.nbrInfirmier,
+          data.nbrTechRadio,
+          data.medecins,
+          data.infirmiers,
+          data.techRadio,
+          data.medTaux,
+          data.infTaux,
+          data.techTaux,
+          data.hebergement,
+          data.dureeMed,
+          data.dureeInf,
+          data.dureeTech,
+          data.frais,
+          data.chargeSupp,
+          data.nbrJours,
+          data.dateFin,
+          data.totalRevenue,
+          data.totalCost,
+          data.totalNet,
+          data.statut,
+          detailsJson
+        );
     }
     
     // ============================================================
